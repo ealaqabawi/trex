@@ -1,0 +1,47 @@
+#!/bin/sh
+# Blocks commits that introduce likely API keys / secrets.
+# Checks staged additions only (not deletions/context lines).
+
+files=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$files" ] && exit 0
+
+blocked=0
+
+for f in $files; do
+    case "$f" in
+        *.env|.env.*)
+            if [ "$f" != ".env.example" ]; then
+                echo "BLOCKED: committing env file '$f' which may contain secrets."
+                blocked=1
+            fi
+            ;;
+    esac
+done
+
+pattern='(api[_-]?key|secret|token|password|passwd)[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_\-]{16,}'
+
+hits=$(git diff --cached -U0 -- $files | grep -E '^\+' | grep -v '^\+\+\+' | grep -Eio "$pattern")
+
+if [ -n "$hits" ]; then
+    echo "BLOCKED: possible secret/API key found in staged changes:"
+    echo "$hits" | sed 's/^/  /'
+    blocked=1
+fi
+
+# Common high-entropy provider key prefixes
+provider_pattern='(sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|xox[baprs]-[A-Za-z0-9-]{10,})'
+provider_hits=$(git diff --cached -U0 -- $files | grep -E '^\+' | grep -v '^\+\+\+' | grep -Eo "$provider_pattern")
+
+if [ -n "$provider_hits" ]; then
+    echo "BLOCKED: possible provider credential found in staged changes:"
+    echo "$provider_hits" | sed 's/^/  /'
+    blocked=1
+fi
+
+if [ "$blocked" -eq 1 ]; then
+    echo ""
+    echo "Commit rejected. Remove the secret, use .env (gitignored), and retry."
+    exit 1
+fi
+
+exit 0

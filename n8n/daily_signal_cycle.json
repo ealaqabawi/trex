@@ -1,0 +1,40 @@
+{
+  "name": "T-REX Daily Signal Cycle",
+  "nodes": [
+    {
+      "name": "Market Hours Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "cronExpression", "expression": "0 30 9-16 * * 1-5" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Run T-REX Daily Summary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [280, 0],
+      "parameters": {
+        "url": "http://127.0.0.1:8787/run-cycle",
+        "method": "GET",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "tickers", "value": "AAPL,NVDA,SPY" }
+          ]
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Market Hours Schedule": {
+      "main": [[{ "node": "Run T-REX Daily Summary", "type": "main", "index": 0 }]]
+    }
+  }
+}

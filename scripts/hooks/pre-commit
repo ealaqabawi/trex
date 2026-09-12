@@ -1,0 +1,54 @@
+#!/bin/sh
+# T-REX secret scanner. Blocks a commit that would publish a credential.
+# Install: ln -sf ../../scripts/hooks/pre-commit .git/hooks/pre-commit
+# Bypass (only for a verified false positive): git commit --no-verify
+
+set -u
+fail=0
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$staged" ] && exit 0
+
+# 1. Files that must never be staged at all.
+for f in $staged; do
+  case "$f" in
+    .env|.env.local|.env.production|*.pem|*.key|*.p12|secrets/*)
+      echo "BLOCKED  $f — secret file must not be committed"
+      fail=1 ;;
+  esac
+done
+
+# 2. Credential shapes inside staged content.
+#    Each pattern is a real key format, not a generic keyword match.
+scan() {
+  pattern="$1"; label="$2"
+  hits=$(git diff --cached -U0 -- $staged | grep -E -e '^\+' | grep -n -E -e "$pattern" | head -3)
+  if [ -n "$hits" ]; then
+    echo "BLOCKED  $label detected in staged content:"
+    echo "$hits" | sed 's/^/         /' | cut -c1-120
+    fail=1
+  fi
+}
+
+scan 'eyJhbGciOi[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}' 'JWT (n8n API key)'
+scan 'sk-or-v1-[A-Za-z0-9]{32,}'                                            'OpenRouter key'
+scan '\b[0-9]{8,10}:AA[A-Za-z0-9_-]{33}\b'                                  'Telegram bot token'
+scan 'sk-[A-Za-z0-9]{32,}'                                                  'OpenAI-style key'
+scan '\bAKIA[0-9A-Z]{16}\b'                                                 'AWS access key id'
+scan '\bghp_[A-Za-z0-9]{36}\b'                                              'GitHub personal access token'
+scan '\bxox[baprs]-[A-Za-z0-9-]{10,}'                                       'Slack token'
+scan '-----BEGIN [A-Z ]*PRIVATE KEY-----'                                   'Private key block'
+scan '(apiKey|api_key|access_token|bot_token)["'"'"']?\s*[:=]\s*["'"'"'][A-Za-z0-9_-]{20,}' 'Hardcoded credential assignment'
+
+if [ "$fail" -ne 0 ]; then
+  cat <<'EOF'
+
+Commit rejected by the T-REX secret scanner.
+
+Move the value into .env (gitignored) or n8n's encrypted credential store,
+and reference it by name. If this is genuinely a false positive, re-run with
+  git commit --no-verify
+and say why in the commit message.
+EOF
+  exit 1
+fi
+exit 0

@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+*.key
+secrets/
+__pycache__/
+*.pyc
+node_modules/
+.DS_Store
+logs/*.log
+logs/orders.jsonl
+logs/daily_summary_*.txt
+.venv/
+data/cache/*.json
