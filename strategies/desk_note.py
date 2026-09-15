@@ -50,19 +50,25 @@ def stop_noise_risk(bars: list[Bar], stop_distance: float,
         f"{hits}/{len(trs)} of the last sessions ({pct:.0f}%) — {verdict}.")
 
 
-def flow_concentration(net_premium: float, top_whale: dict | None,
+def flow_concentration(whale_premium_total: float, top_whale: dict | None,
                         whale_count: int) -> NoteLine | None:
-    """A large net premium carried by one contract is a single opinion, not
-    a consensus."""
-    if not top_whale or net_premium <= 0:
+    """A large flow carried by one contract is a single opinion, not a
+    consensus.
+
+    The denominator is total whale premium, not net premium. Net is
+    calls minus puts, so when the two sides nearly offset it collapses
+    toward zero and the share explodes — NVDA produced "448% of net
+    premium", which is meaningless.
+    """
+    if not top_whale or whale_premium_total <= 0:
         return None
-    share = top_whale["premium"] / net_premium * 100
+    share = min(top_whale["premium"] / whale_premium_total * 100, 100.0)
     verdict = ("one contract dominates the flow — treat as a single bet"
                if share >= 50 else
                "flow is reasonably spread across contracts" if share < 25 else
                "flow is moderately concentrated")
     return NoteLine("flow",
-        f"Largest single contract is {share:.0f}% of net premium "
+        f"Largest single contract is {share:.0f}% of whale premium "
         f"across {whale_count} whale contracts — {verdict}.")
 
 
@@ -119,7 +125,8 @@ def build_desk_note(sig, bars: list[Bar]) -> list[NoteLine]:
             lines.append(n)
         if (n := risk_reward(sig.levels)):
             lines.append(n)
-    if (n := flow_concentration(sig.net_premium, sig.top_whale, sig.whale_count)):
+    if (n := flow_concentration(getattr(sig, 'whale_premium_total', 0.0),
+                                 sig.top_whale, sig.whale_count)):
         lines.append(n)
     if (n := spread_cost(sig.contract)):
         lines.append(n)

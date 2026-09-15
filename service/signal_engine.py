@@ -37,6 +37,7 @@ class Signal:
     net_premium: float
     net_premium_display: str
     whale_count: int
+    whale_premium_total: float
     top_whale: dict | None
     confidence: int
     confidence_components: dict
@@ -67,7 +68,8 @@ def build_signal(ticker: str) -> Signal:
         return Signal(
             ticker=ticker, direction="NEUTRAL", action="HOLD", price=price,
             momentum_pct=None, price_signal="HOLD", options_signal="HOLD",
-            net_premium=0.0, net_premium_display="+$0", whale_count=0, top_whale=None,
+            net_premium=0.0, net_premium_display="+$0", whale_count=0,
+            whale_premium_total=0.0, top_whale=None,
             confidence=0, confidence_components={}, confidence_notes=["no price data"],
             levels=None, contract=None, desk_note=[], generated_at=now, data_ok=False,
             error=hist.error or "no last price",
@@ -110,6 +112,8 @@ def build_signal(ticker: str) -> Signal:
         net_premium=flow.net_premium if flow.ok else 0.0,
         net_premium_display=format_money(flow.net_premium) if flow.ok else "n/a",
         whale_count=len(flow.whale_contracts) if flow.ok else 0,
+        whale_premium_total=(sum(w['premium'] for w in flow.whale_contracts)
+                              if flow.ok else 0.0),
         top_whale=flow.whale_contracts[0] if flow.ok and flow.whale_contracts else None,
         confidence=conf.score, confidence_components=conf.components,
         confidence_notes=conf.notes,
@@ -126,6 +130,8 @@ def build_signal(ticker: str) -> Signal:
         net_premium=flow.net_premium if flow.ok else 0.0,
         net_premium_display=format_money(flow.net_premium) if flow.ok else "n/a",
         whale_count=len(flow.whale_contracts) if flow.ok else 0,
+        whale_premium_total=(sum(w['premium'] for w in flow.whale_contracts)
+                              if flow.ok else 0.0),
         top_whale=flow.whale_contracts[0] if flow.ok and flow.whale_contracts else None,
         confidence=conf.score, confidence_components=conf.components,
         confidence_notes=conf.notes,
