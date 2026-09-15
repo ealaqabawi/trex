@@ -161,7 +161,7 @@
       },
       "credentials": {
         "ollamaApi": {
-          "id": "sAearmTQv9S9NSV8",
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
           "name": "T-REX Ollama (local)"
         }
       }
@@ -185,7 +185,7 @@
       },
       "credentials": {
         "ollamaApi": {
-          "id": "sAearmTQv9S9NSV8",
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
           "name": "T-REX Ollama (local)"
         }
       }
@@ -208,7 +208,7 @@
       },
       "credentials": {
         "ollamaApi": {
-          "id": "sAearmTQv9S9NSV8",
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
           "name": "T-REX Ollama (local)"
         }
       }
@@ -231,7 +231,7 @@
       },
       "credentials": {
         "ollamaApi": {
-          "id": "sAearmTQv9S9NSV8",
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
           "name": "T-REX Ollama (local)"
         }
       }
@@ -254,7 +254,7 @@
       },
       "credentials": {
         "ollamaApi": {
-          "id": "sAearmTQv9S9NSV8",
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
           "name": "T-REX Ollama (local)"
         }
       }
@@ -308,7 +308,7 @@
       "parameters": {
         "resource": "message",
         "operation": "sendMessage",
-        "chatId": "1156952811",
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
         "text": "={{ $json.card }}{{ $json.commentary ? '\\n\\n\ud83e\udd16 _AI note (grounded):_ ' + $json.commentary : '' }}",
         "additionalFields": {
           "parse_mode": "Markdown",
@@ -318,7 +318,7 @@
       },
       "credentials": {
         "telegramApi": {
-          "id": "5tyy0AJ7j5rvtWVK",
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
           "name": "T-REX Telegram (Trex bot)"
         }
       }
