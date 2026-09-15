@@ -1,40 +1,563 @@
 {
-  "name": "T-REX Daily Signal Cycle",
+  "name": "TRex",
   "nodes": [
     {
       "name": "Market Hours Schedule",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [0, 0],
+      "position": [
+        -640,
+        0
+      ],
       "parameters": {
         "rule": {
           "interval": [
-            { "field": "cronExpression", "expression": "0 30 9-16 * * 1-5" }
+            {
+              "field": "cronExpression",
+              "expression": "0 30 9-15 * * 1-5"
+            }
           ]
         }
       }
     },
     {
-      "name": "Run T-REX Daily Summary",
+      "name": "Whale Flow Data",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
-      "position": [280, 0],
+      "position": [
+        -420,
+        0
+      ],
       "parameters": {
-        "url": "http://127.0.0.1:8787/run-cycle",
+        "url": "http://127.0.0.1:8787/signal",
         "method": "GET",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "tickers", "value": "AAPL,NVDA,SPY" }
+            {
+              "name": "tickers",
+              "value": "AAPL,NVDA,SPY,TSLA,AMD,MSFT,META,AMZN"
+            },
+            {
+              "name": "actionable",
+              "value": "true"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 600000
+        }
+      }
+    },
+    {
+      "name": "Flow Analyst",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -140,
+        -200
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.prompt }}",
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "FLOW ANALYST. Judge only whether the net options premium genuinely supports the stated direction, or whether it rests on one or two contracts and is fragile. Max 3 lines, under 60 words. Never invent a number you were not given.",
+          "maxIterations": 2,
+          "enableStreaming": false
+        }
+      }
+    },
+    {
+      "name": "Risk Skeptic",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -140,
+        200
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.prompt }}",
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "RISK SKEPTIC. Argue against the trade, specifically. Check two things: is the stop inside normal daily range for this ATR (then noise alone hits it), and does the confidence lean on an unproven history component. Name the single biggest reason to skip. If it is genuinely sound, say so. Max 3 lines, under 60 words. Never invent numbers.",
+          "maxIterations": 2,
+          "enableStreaming": false
+        }
+      }
+    },
+    {
+      "name": "Merge Takes",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        180,
+        0
+      ],
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 2
+      }
+    },
+    {
+      "name": "Aggregate Takes",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        360,
+        0
+      ],
+      "parameters": {
+        "aggregate": "aggregateIndividualFields",
+        "fieldsToAggregate": {
+          "fieldToAggregate": [
+            {
+              "fieldToAggregate": "output",
+              "renameField": false
+            }
           ]
         },
         "options": {}
+      }
+    },
+    {
+      "name": "Desk Editor",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        560,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "promptType": "define",
+        "text": "=SIGNALS:\n{{ $('Whale Flow Data').item.json.prompt }}\n\nDESK TAKES:\n{{ $json.output.join('\\n\\n---\\n\\n') }}",
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "DESK EDITOR. The signal card is already sent; you write only the short note beneath it. Given the flow read and the skeptic's objection, write at most TWO lines: the desk's net view, and the one thing that would invalidate it. No headings, no restating numbers on the card. Paper trading only \u2014 never imply a live order was placed.",
+          "maxIterations": 3,
+          "enableStreaming": false
+        }
+      }
+    },
+    {
+      "name": "Llama 3.2",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        -300,
+        460
+      ],
+      "parameters": {
+        "model": "llama3.2",
+        "options": {
+          "temperature": 0.3,
+          "keepAlive": "30m",
+          "numPredict": 150
+        }
+      },
+      "credentials": {
+        "ollamaApi": {
+          "id": "sAearmTQv9S9NSV8",
+          "name": "T-REX Ollama (local)"
+        }
+      }
+    },
+    {
+      "name": "Qwen 3",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        -120,
+        460
+      ],
+      "parameters": {
+        "model": "qwen3:4b",
+        "options": {
+          "temperature": 0.3,
+          "keepAlive": "30m",
+          "numPredict": 150,
+          "think": false
+        }
+      },
+      "credentials": {
+        "ollamaApi": {
+          "id": "sAearmTQv9S9NSV8",
+          "name": "T-REX Ollama (local)"
+        }
+      }
+    },
+    {
+      "name": "Qwen 2.5",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        60,
+        460
+      ],
+      "parameters": {
+        "model": "qwen2.5:7b",
+        "options": {
+          "temperature": 0.3,
+          "keepAlive": "30m",
+          "numPredict": 150
+        }
+      },
+      "credentials": {
+        "ollamaApi": {
+          "id": "sAearmTQv9S9NSV8",
+          "name": "T-REX Ollama (local)"
+        }
+      }
+    },
+    {
+      "name": "Mistral",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        240,
+        460
+      ],
+      "parameters": {
+        "model": "mistral:7b",
+        "options": {
+          "temperature": 0.3,
+          "keepAlive": "30m",
+          "numPredict": 150
+        }
+      },
+      "credentials": {
+        "ollamaApi": {
+          "id": "sAearmTQv9S9NSV8",
+          "name": "T-REX Ollama (local)"
+        }
+      }
+    },
+    {
+      "name": "Llama 3.1",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        420,
+        460
+      ],
+      "parameters": {
+        "model": "llama3.1:8b",
+        "options": {
+          "temperature": 0.3,
+          "keepAlive": "30m",
+          "numPredict": 150
+        }
+      },
+      "credentials": {
+        "ollamaApi": {
+          "id": "sAearmTQv9S9NSV8",
+          "name": "T-REX Ollama (local)"
+        }
+      }
+    },
+    {
+      "name": "Analyst Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.4,
+      "position": [
+        600,
+        460
+      ],
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "trex-daily-briefing",
+        "contextWindowLength": 10
+      }
+    },
+    {
+      "name": "Calculator",
+      "type": "@n8n/n8n-nodes-langchain.toolCalculator",
+      "typeVersion": 1,
+      "position": [
+        760,
+        460
+      ],
+      "parameters": {}
+    },
+    {
+      "name": "Compose Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        800,
+        0
+      ],
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={\n  \"generated_at\": \"{{ $now.toISO() }}\",\n  \"card\": {{ JSON.stringify($('Whale Flow Data').item.json.telegram) }},\n  \"commentary\": {{ JSON.stringify($json.commentary || '') }},\n  \"grounded\": {{ $json.grounded === false ? false : true }}\n}",
+        "options": {}
+      }
+    },
+    {
+      "name": "Send to Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1000,
+        0
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "1156952811",
+        "text": "={{ $json.card }}{{ $json.commentary ? '\\n\\n\ud83e\udd16 _AI note (grounded):_ ' + $json.commentary : '' }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "appendAttribution": false,
+          "disable_web_page_preview": true
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "5tyy0AJ7j5rvtWVK",
+          "name": "T-REX Telegram (Trex bot)"
+        }
+      }
+    },
+    {
+      "name": "Feedback Loop",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1200,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "url": "http://127.0.0.1:8787/review",
+        "method": "GET",
+        "options": {
+          "timeout": 300000
+        }
+      }
+    },
+    {
+      "name": "Vet Commentary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        780,
+        -160
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "url": "http://127.0.0.1:8787/vet",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ commentary: $json.output || '', source: $('Whale Flow Data').item.json.prompt }) }}",
+        "options": {
+          "timeout": 60000
+        }
       }
     }
   ],
   "connections": {
     "Market Hours Schedule": {
-      "main": [[{ "node": "Run T-REX Daily Summary", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Whale Flow Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Whale Flow Data": {
+      "main": [
+        [
+          {
+            "node": "Flow Analyst",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Risk Skeptic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flow Analyst": {
+      "main": [
+        [
+          {
+            "node": "Merge Takes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Risk Skeptic": {
+      "main": [
+        [
+          {
+            "node": "Merge Takes",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Takes": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Takes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Takes": {
+      "main": [
+        [
+          {
+            "node": "Desk Editor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Desk Editor": {
+      "main": [
+        [
+          {
+            "node": "Vet Commentary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose Message": {
+      "main": [
+        [
+          {
+            "node": "Send to Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send to Telegram": {
+      "main": [
+        [
+          {
+            "node": "Feedback Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Llama 3.2": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Flow Analyst",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Risk Skeptic",
+            "type": "ai_languageModel",
+            "index": 1
+          },
+          {
+            "node": "Desk Editor",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qwen 3": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Risk Skeptic",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qwen 2.5": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Flow Analyst",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Mistral": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Desk Editor",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Llama 3.1": {
+      "ai_languageModel": [
+        []
+      ]
+    },
+    "Analyst Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Desk Editor",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculator": {
+      "ai_tool": [
+        [
+          {
+            "node": "Desk Editor",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vet Commentary": {
+      "main": [
+        [
+          {
+            "node": "Compose Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   }
 }

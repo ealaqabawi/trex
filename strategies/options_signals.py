@@ -45,17 +45,19 @@ def analyze_chain(ticker: str, unusual_volume_multiple: float = 3.0) -> OptionsA
     calls = [c for c in result.chain if c.get("contract_type") == "call"]
     puts = [c for c in result.chain if c.get("contract_type") == "put"]
 
-    call_volume = sum(c.get("volume") or 0 for c in calls)
-    put_volume = sum(p.get("volume") or 0 for p in puts)
+    from strategies.whale_flow import num  # NaN-safe: `nan or 0` returns nan
+
+    call_volume = sum(num(c.get("volume")) for c in calls)
+    put_volume = sum(num(p.get("volume")) for p in puts)
     pcr = (put_volume / call_volume) if call_volume else None
 
-    avg_iv_calls = _avg([c["impliedVolatility"] for c in calls if c.get("impliedVolatility")])
-    avg_iv_puts = _avg([p["impliedVolatility"] for p in puts if p.get("impliedVolatility")])
+    avg_iv_calls = _avg([num(c.get("impliedVolatility")) for c in calls if num(c.get("impliedVolatility"))])
+    avg_iv_puts = _avg([num(p.get("impliedVolatility")) for p in puts if num(p.get("impliedVolatility"))])
 
     unusual = [
         c for c in result.chain
-        if (c.get("volume") or 0) > unusual_volume_multiple * max(c.get("openInterest") or 0, 1)
-        and (c.get("volume") or 0) > 100
+        if num(c.get("volume")) > unusual_volume_multiple * max(num(c.get("openInterest")), 1.0)
+        and num(c.get("volume")) > 100
     ]
 
     return OptionsAnalysis(

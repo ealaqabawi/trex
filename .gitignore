@@ -12,3 +12,4 @@ logs/orders.jsonl
 logs/daily_summary_*.txt
 .venv/
 data/cache/*.json
+logs/signals.jsonl
