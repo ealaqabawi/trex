@@ -15,25 +15,37 @@ long-polls the same bot, and a second getUpdates consumer makes Telegram
 return 409 Conflict and can steal Hermes's messages. sendMessage does not
 conflict with polling, so the test send is safe.
 
-~/trex/.env is backed up to .env.bak-<timestamp> before any edit, then
-rewritten atomically with mode 600.
+~/trex/.env (or the file it symlinks to) is backed up to
+.env.bak-<timestamp> with mode 600, then rewritten atomically with mode
+600. Lines other than the four Telegram keys are copied byte-for-byte,
+using python-dotenv's own parser so multiline values survive.
 """
 
 import argparse
 import getpass
+import io
 import json
 import os
 import re
 import shutil
+import ssl
+import subprocess
 import sys
 import tempfile
 import time
 import urllib.error
 import urllib.request
 
+try:
+    from dotenv import dotenv_values
+    from dotenv.parser import parse_stream
+except ImportError:  # pragma: no cover
+    sys.exit("python-dotenv is missing. Run: python3 -m pip install -r requirements.txt")
+
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TOKEN_RE = re.compile(r"^\d{6,12}:[A-Za-z0-9_-]{30,}$")
 CHAT_ID_RE = re.compile(r"^-?\d{5,20}$")
+TRIGGER_SERVER_LABEL = "com.trex.trigger-server"
 
 # Keys that hold a chat id in TRAX's own .env or in Hermes's. List-valued
 # keys (comma-separated user ids) contribute their first entry; for a
@@ -46,6 +58,8 @@ CHAT_ID_KEYS = (
     "TELEGRAM_ALLOWED_CHAT_IDS",
 )
 
+_run = subprocess.run
+
 
 def default_trex_env() -> str:
     return os.environ.get("TRAX_ENV_FILE") or os.path.join(REPO_ROOT, ".env")
@@ -55,83 +69,78 @@ def default_hermes_env() -> str:
     return os.environ.get("HERMES_ENV_FILE") or os.path.expanduser("~/.hermes/.env")
 
 
-def _parse_line(line: str):
-    """Returns (key, value) for an assignment line, else None."""
-    s = line.strip()
-    if s.startswith("export "):
-        s = s[len("export "):].lstrip()
-    if not s or s.startswith("#") or "=" not in s:
-        return None
-    key, value = s.split("=", 1)
-    key, value = key.strip(), value.strip()
-    if value[:1] in ("'", '"'):
-        quote = value[0]
-        end = value.find(quote, 1)
-        value = value[1:end] if end != -1 else value[1:]
-    elif " #" in value:
-        value = value.split(" #", 1)[0].rstrip()
-    return key, value
-
-
 def read_env_file(path: str) -> dict:
-    """Parse KEY=VALUE lines. Later duplicates win, matching python-dotenv."""
+    """Parse with python-dotenv itself, so values match what TRAX loads."""
     if not os.path.exists(path):
         return {}
-    out = {}
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            parsed = _parse_line(line)
-            if parsed:
-                out[parsed[0]] = parsed[1]
-    return out
+    return {k: (v or "") for k, v in dotenv_values(path).items()}
+
+
+def backup_file(path: str) -> str:
+    """Copy `path` to <path>.bak-<timestamp>, created 0600 from the first
+    byte (copy2 would create it 0644 under the default umask and only then
+    narrow it). O_EXCL never overwrites an earlier backup."""
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    for n in range(100):
+        candidate = f"{path}.bak-{stamp}" + (f"-{n}" if n else "")
+        try:
+            fd = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            continue
+        with os.fdopen(fd, "wb") as out, open(path, "rb") as src:
+            shutil.copyfileobj(src, out)
+        return candidate
+    raise RuntimeError(f"could not create a backup next to {path}")
 
 
 def upsert_env(path: str, updates: dict, template: str | None = None) -> list[str]:
-    """Set each key in `updates`, preserving every other line and comment.
-    Replaces the first definition of a key, drops later duplicates, and
-    appends keys that were absent. Creates the file from `template` when
-    missing. Returns the keys that changed."""
+    """Set each key in `updates`. Every other entry, comment and blank line
+    is written back exactly as read. The first definition of a key is
+    replaced, later duplicates are dropped, and absent keys are appended.
+    Creates the file from `template` when missing. A symlinked `path` is
+    followed, so the link's target is updated and the link survives.
+    Returns the keys whose value changed."""
+    path = os.path.realpath(path)
     if os.path.exists(path):
-        with open(path, encoding="utf-8") as f:
-            lines = f.read().splitlines()
+        with open(path, encoding="utf-8", newline="") as f:
+            text = f.read()
     elif template and os.path.exists(template):
-        with open(template, encoding="utf-8") as f:
-            lines = f.read().splitlines()
+        with open(template, encoding="utf-8", newline="") as f:
+            text = f.read()
     else:
-        lines = []
+        text = ""
 
-    current = {}
-    for line in lines:
-        parsed = _parse_line(line)
-        if parsed:
-            current[parsed[0]] = parsed[1]
+    bindings = list(parse_stream(io.StringIO(text)))
+    current = {b.key: (b.value or "") for b in bindings if b.key and not b.error}
     changed = [k for k, v in updates.items() if current.get(k) != v]
 
     seen: set[str] = set()
-    out: list[str] = []
-    for line in lines:
-        parsed = _parse_line(line)
-        key = parsed[0] if parsed else None
-        if key in updates:
-            if key in seen:
+    parts: list[str] = []
+    for b in bindings:
+        raw = b.original.string
+        if b.key in updates and not b.error:
+            if b.key in seen:
                 continue
-            out.append(f"{key}={updates[key]}")
-            seen.add(key)
+            seen.add(b.key)
+            leading = raw[: len(raw) - len(raw.lstrip())]
+            parts.append(f"{leading}{b.key}={updates[b.key]}\n")
         else:
-            out.append(line)
+            parts.append(raw)
 
     missing = [k for k in updates if k not in seen]
     if missing:
-        if out and out[-1].strip():
-            out.append("")
-        out.append("# --- set by scripts/setup_telegram.py ---")
-        out.extend(f"{k}={updates[k]}" for k in missing)
+        body = "".join(parts)
+        if body and not body.endswith("\n"):
+            parts.append("\n")
+        if body.strip():
+            parts.append("\n")
+        parts.append("# --- set by scripts/setup_telegram.py ---\n")
+        parts.extend(f"{k}={updates[k]}\n" for k in missing)
 
-    directory = os.path.dirname(os.path.abspath(path))
-    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".env.tmp-")
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".env.tmp-")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write("\n".join(out) + "\n")
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.write("".join(parts))
         os.chmod(tmp, 0o600)
         os.replace(tmp, path)
     except BaseException:
@@ -141,20 +150,32 @@ def upsert_env(path: str, updates: dict, template: str | None = None) -> list[st
     return changed
 
 
-def redact(text: str, token: str) -> str:
+def redact(text, token: str) -> str:
     return str(text).replace(token, "[redacted]") if token else str(text)
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """python.org macOS builds ship without a CA store until the user runs
+    'Install Certificates.command'; certifi (installed with requests) fills
+    that gap, which is why the rest of TRAX never hit it."""
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
 
 
 def telegram_call(token: str, method: str, payload: dict | None = None,
                   timeout: float = 15.0) -> tuple[int, dict]:
-    """POST/GET a Bot API method. Returns (http_status, json_body). Never raises
-    with the token in the message."""
+    """Call a Bot API method. Returns (http_status, json_body); status 0
+    means Telegram was never reached. Never raises with the token in the
+    message."""
     url = f"https://api.telegram.org/bot{token}/{method}"
     data = json.dumps(payload).encode() if payload is not None else None
     headers = {"Content-Type": "application/json"} if data else {}
     req = urllib.request.Request(url, data=data, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as resp:
             return resp.status, json.loads(resp.read().decode() or "{}")
     except urllib.error.HTTPError as e:
         try:
@@ -166,9 +187,18 @@ def telegram_call(token: str, method: str, payload: dict | None = None,
         return 0, {"description": redact(e, token)}
 
 
+def explain_unreachable(reason: str) -> None:
+    print(f"Could not reach api.telegram.org: {reason}")
+    print("This is a network problem, not a bad token; don't rotate it.")
+    if "CERTIFICATE_VERIFY_FAILED" in reason:
+        v = sys.version_info
+        print(f'Fix: double-click "/Applications/Python {v.major}.{v.minor}/Install Certificates.command",')
+        print("or run: python3 -m pip install certifi  — then rerun this script.")
+
+
 def find_token(trex_env: dict, hermes_env: dict) -> tuple[str, str]:
     for source, env in (("~/trex/.env", trex_env), ("~/.hermes/.env", hermes_env)):
-        token = env.get("TELEGRAM_BOT_TOKEN", "")
+        token = env.get("TELEGRAM_BOT_TOKEN", "").strip()
         if TOKEN_RE.match(token):
             return token, source
     return "", ""
@@ -182,6 +212,23 @@ def find_chat_id(trex_env: dict, hermes_env: dict) -> tuple[str, str]:
             if CHAT_ID_RE.match(candidate):
                 return candidate, f"{source} {key}"
     return "", ""
+
+
+def _is_macos() -> bool:
+    return sys.platform == "darwin"
+
+
+def restart_trigger_server() -> str:
+    """Kickstart the com.trex.trigger-server LaunchAgent. It is the process
+    that auto-sends signals, and it read .env once at startup.
+    Returns 'restarted', 'not_loaded', 'skipped' or 'failed: ...'."""
+    if not _is_macos():
+        return "skipped"
+    target = f"gui/{os.getuid()}/{TRIGGER_SERVER_LABEL}"
+    if _run(["launchctl", "print", target], capture_output=True, text=True).returncode != 0:
+        return "not_loaded"
+    res = _run(["launchctl", "kickstart", "-k", target], capture_output=True, text=True)
+    return "restarted" if res.returncode == 0 else f"failed: {res.stderr.strip()[:200]}"
 
 
 def main(argv: list[str] | None = None, input_fn=input, secret_fn=getpass.getpass) -> int:
@@ -208,6 +255,9 @@ def main(argv: list[str] | None = None, input_fn=input, secret_fn=getpass.getpas
         return 1
 
     status, body = telegram_call(token, "getMe")
+    if status == 0:
+        explain_unreachable(redact(body.get("description", ""), token))
+        return 1
     if status != 200 or not body.get("ok"):
         reason = redact(body.get("description") or f"HTTP {status}", token)
         print(f"Telegram rejected the token from {token_source}: {reason}")
@@ -237,38 +287,57 @@ def main(argv: list[str] | None = None, input_fn=input, secret_fn=getpass.getpas
         "TELEGRAM_AUTOSEND": "false" if args.no_autosend else "true",
     }
 
+    real_path = os.path.realpath(trex_path)
     if args.dry_run:
         pending = [k for k, v in updates.items() if trex_env.get(k) != v]
-        print(f"[dry run] would update {trex_path}: {', '.join(pending) or 'nothing'}")
+        print(f"[dry run] would update {real_path}: {', '.join(pending) or 'nothing'}")
         print("[dry run] no file written, no message sent.")
         return 0
 
-    if os.path.exists(trex_path):
-        backup = f"{trex_path}.bak-{time.strftime('%Y%m%d-%H%M%S')}"
-        shutil.copy2(trex_path, backup)
-        os.chmod(backup, 0o600)
+    if real_path != os.path.abspath(trex_path):
+        print(f"    {trex_path} is a symlink; updating its target {real_path}")
+    if os.path.exists(real_path):
+        backup = backup_file(real_path)
         print(f"    backed up existing .env to {os.path.basename(backup)}")
     template = os.path.join(os.path.dirname(os.path.abspath(trex_path)), ".env.example")
     changed = upsert_env(trex_path, updates, template=template)
-    print(f"    wrote {trex_path} ({', '.join(changed) or 'already up to date'})")
+    print(f"    wrote {real_path} ({', '.join(changed) or 'already up to date'})")
 
     status, body = telegram_call(token, "sendMessage", {
         "chat_id": chat_id,
         "text": "TRAX is connected to Telegram. Signals will arrive in this chat.",
         "disable_web_page_preview": True,
     })
-    if status == 200 and body.get("ok"):
-        print("3/3 Test message sent. Check Telegram.")
-    else:
+    if status == 0:
+        explain_unreachable(redact(body.get("description", ""), token))
+        return 1
+    if status != 200 or not body.get("ok"):
         reason = redact(body.get("description") or f"HTTP {status}", token)
         print(f"3/3 .env is written, but the test send failed: {reason}")
         if "chat not found" in reason.lower():
             print("    Open @MyETRex_bot in Telegram, press Start, then rerun this script.")
         return 1
+    print("3/3 Test message sent. Check Telegram.")
 
     print()
-    print("Restart the backend so it reads the new .env (uvicorn --reload")
-    print("watches .py files, not .env): press Ctrl-C in its terminal, then")
+    if _is_macos():
+        try:
+            answer = input_fn(f"Restart {TRIGGER_SERVER_LABEL} now so autosend takes effect? [Y/n] ")
+        except EOFError:
+            answer = ""
+        if answer.strip().lower() in ("", "y", "yes"):
+            result = restart_trigger_server()
+            if result == "restarted":
+                print(f"    {TRIGGER_SERVER_LABEL} restarted; it now reads the new .env.")
+            elif result == "not_loaded":
+                print(f"    {TRIGGER_SERVER_LABEL} isn't loaded; nothing to restart.")
+            else:
+                print(f"    restart {result}")
+        else:
+            print(f"    Later, run: launchctl kickstart -k gui/$(id -u)/{TRIGGER_SERVER_LABEL}")
+
+    print("Restart the dashboard backend too (uvicorn --reload watches .py")
+    print("files, not .env): press Ctrl-C in its terminal, then")
     print("  python3 -m uvicorn api.main:app --port 8788 --reload")
     return 0
 

@@ -107,6 +107,69 @@ def test_upsert_reports_no_change_when_identical(tmp_path):
     assert st.upsert_env(str(p), {"TELEGRAM_CHAT_ID": "123456789"}) == []
 
 
+def test_upsert_preserves_unrelated_lines_byte_for_byte(tmp_path):
+    """Multiline values, Unicode line separators, CRLF and odd lines must
+    come back exactly as written — only the target key changes."""
+    p = tmp_path / ".env"
+    original = (
+        'PROMPT="line one\nline two"\n'
+        "GREETING=Hello World\n"
+        "SECRET=ab\x0ccd\r\n"
+        "this is not an assignment\n"
+        "TELEGRAM_CHAT_ID=1\n"
+        "TAIL=x"
+    )
+    p.write_bytes(original.encode())
+    before = st.read_env_file(str(p))
+    st.upsert_env(str(p), {"TELEGRAM_CHAT_ID": "123456789"})
+    after_text = p.read_bytes().decode()
+    assert after_text == original.replace("TELEGRAM_CHAT_ID=1\n", "TELEGRAM_CHAT_ID=123456789\n")
+    after = st.read_env_file(str(p))
+    before.pop("TELEGRAM_CHAT_ID"), after.pop("TELEGRAM_CHAT_ID")
+    assert after == before
+
+
+def test_upsert_appends_after_file_without_trailing_newline(tmp_path):
+    p = tmp_path / ".env"
+    p.write_text("A=1")
+    st.upsert_env(str(p), {"B": "2"})
+    assert st.read_env_file(str(p)) == {"A": "1", "B": "2"}
+
+
+def test_upsert_follows_symlink_and_keeps_the_link(tmp_path):
+    target = tmp_path / "secrets" / "trex.env"
+    target.parent.mkdir()
+    target.write_text("A=1\n")
+    link = tmp_path / ".env"
+    link.symlink_to(target)
+    st.upsert_env(str(link), {"TELEGRAM_CHAT_ID": "123456789"})
+    assert link.is_symlink()
+    assert st.read_env_file(str(target)) == {"A": "1", "TELEGRAM_CHAT_ID": "123456789"}
+
+
+def test_backup_is_private_from_creation_and_never_overwrites(tmp_path, monkeypatch):
+    p = tmp_path / ".env"
+    p.write_text(f"TELEGRAM_BOT_TOKEN={TOKEN}\n")
+    os.chmod(p, 0o600)
+    created_modes = []
+    real_open = os.open
+
+    def spy_open(path, flags, mode=0o777, *a, **k):
+        if ".bak-" in str(path):
+            created_modes.append(mode)
+        return real_open(path, flags, mode, *a, **k)
+
+    monkeypatch.setattr(st.os, "open", spy_open)
+    monkeypatch.setattr(st.time, "strftime", lambda fmt: "20261009-120000")
+    first = st.backup_file(str(p))
+    second = st.backup_file(str(p))
+    assert created_modes == [0o600, 0o600, 0o600]  # second call hits the existing name once
+    assert first != second
+    for b in (first, second):
+        assert stat.S_IMODE(os.stat(b).st_mode) == 0o600
+        assert open(b).read() == f"TELEGRAM_BOT_TOKEN={TOKEN}\n"
+
+
 # --- discovery -------------------------------------------------------------
 
 def test_find_token_prefers_trex_then_hermes():
@@ -216,6 +279,88 @@ def test_main_chat_not_found_explains_start(envs, monkeypatch, capsys):
     }, []))
     assert st.main(["--chat-id", "123456789"]) == 1
     assert "press Start" in capsys.readouterr().out
+
+
+def test_main_unreachable_is_not_reported_as_bad_token(envs, monkeypatch, capsys):
+    """A TLS/network failure must not tell the user their token is bad —
+    rotating it would break the running Hermes gateway."""
+    trex, hermes = envs
+    hermes.write_text(f"TELEGRAM_BOT_TOKEN={TOKEN}\n")
+    reason = ("<urlopen error [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify "
+              "failed: unable to get local issuer certificate>")
+    monkeypatch.setattr(st, "telegram_call", _fake_telegram(
+        {"getMe": (0, {"description": reason})}, []))
+    assert st.main(["--chat-id", "123456789"]) == 1
+    out = capsys.readouterr().out
+    assert "rejected" not in out
+    assert "not a bad token" in out
+    assert "Install Certificates.command" in out
+    assert not trex.exists()
+
+
+def test_telegram_call_uses_certifi_context(monkeypatch):
+    seen = {}
+
+    class FakeResp:
+        status = 200
+        def read(self): return b'{"ok": true, "result": {"username": "x"}}'
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_urlopen(req, timeout=None, context=None):
+        seen["context"] = context
+        return FakeResp()
+
+    monkeypatch.setattr(st.urllib.request, "urlopen", fake_urlopen)
+    status, body = st.telegram_call(TOKEN, "getMe")
+    assert status == 200 and body["ok"]
+    assert seen["context"] is not None
+
+
+def test_telegram_call_network_error_is_redacted(monkeypatch):
+    def boom(req, timeout=None, context=None):
+        raise OSError(f"failed for https://api.telegram.org/bot{TOKEN}/getMe")
+    monkeypatch.setattr(st.urllib.request, "urlopen", boom)
+    status, body = st.telegram_call(TOKEN, "getMe")
+    assert status == 0
+    assert TOKEN not in body["description"]
+
+
+def test_main_restarts_trigger_server_on_macos(envs, monkeypatch, capsys):
+    _, hermes = envs
+    hermes.write_text(f"TELEGRAM_BOT_TOKEN={TOKEN}\n")
+    monkeypatch.setattr(st, "telegram_call", _fake_telegram(
+        {"getMe": GET_ME_OK, "sendMessage": SEND_OK}, []))
+    monkeypatch.setattr(st, "_is_macos", lambda: True)
+    commands = []
+
+    def fake_run(cmd, **kw):
+        commands.append(cmd)
+        return type("R", (), {"returncode": 0, "stderr": ""})()
+
+    monkeypatch.setattr(st, "_run", fake_run)
+    assert st.main(["--chat-id", "123456789"], input_fn=lambda _: "") == 0
+    assert commands[0][:2] == ["launchctl", "print"]
+    assert commands[1][:3] == ["launchctl", "kickstart", "-k"]
+    assert commands[1][3].endswith("/com.trex.trigger-server")
+    assert "restarted" in capsys.readouterr().out
+
+
+def test_main_skips_restart_when_declined(envs, monkeypatch, capsys):
+    _, hermes = envs
+    hermes.write_text(f"TELEGRAM_BOT_TOKEN={TOKEN}\n")
+    monkeypatch.setattr(st, "telegram_call", _fake_telegram(
+        {"getMe": GET_ME_OK, "sendMessage": SEND_OK}, []))
+    monkeypatch.setattr(st, "_is_macos", lambda: True)
+    monkeypatch.setattr(st, "_run", lambda *a, **k: pytest.fail("must not run launchctl"))
+    assert st.main(["--chat-id", "123456789"], input_fn=lambda _: "n") == 0
+    assert "launchctl kickstart -k" in capsys.readouterr().out
+
+
+def test_restart_reports_not_loaded(monkeypatch):
+    monkeypatch.setattr(st, "_is_macos", lambda: True)
+    monkeypatch.setattr(st, "_run", lambda cmd, **k: type("R", (), {"returncode": 113, "stderr": ""})())
+    assert st.restart_trigger_server() == "not_loaded"
 
 
 def test_main_no_autosend_flag(envs, monkeypatch):
