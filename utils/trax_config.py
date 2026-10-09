@@ -44,6 +44,8 @@ class TraxConfig:
     mode: str = field(default_factory=lambda: os.getenv("TRAX_MODE", "research").strip().lower())
     telegram_bot_token: str = field(default_factory=lambda: os.getenv("TELEGRAM_BOT_TOKEN", ""))
     telegram_chat_id: str = field(default_factory=lambda: os.getenv("TELEGRAM_CHAT_ID", ""))
+    telegram_autosend: bool = field(default_factory=lambda:
+        os.getenv("TELEGRAM_AUTOSEND", "").lower() in ("1", "true", "yes"))
     data_freshness_warning_minutes: int = field(default_factory=lambda: int(os.getenv("TRAX_DATA_FRESHNESS_WARN_MIN", "15")))
     data_freshness_stale_minutes: int = field(default_factory=lambda: int(os.getenv("TRAX_DATA_FRESHNESS_STALE_MIN", "60")))
     local_model_backend: str = field(default_factory=lambda: os.getenv("TRAX_LOCAL_MODEL_BACKEND", "ollama"))
@@ -80,6 +82,7 @@ class TraxConfig:
             "local_model_name": self.local_model_name,
             "local_model_url": self.local_model_url,
             "telegram_configured": bool(self.telegram_bot_token and self.telegram_chat_id),
+            "telegram_autosend": self.telegram_autosend,
             "risk": asdict(self.risk),
             "live_mode_available": self.live_mode_unlock_present(),
             "allowed_modes": list(ALLOWED_MODES),

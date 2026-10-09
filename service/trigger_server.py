@@ -53,8 +53,12 @@ class Handler(BaseHTTPRequestHandler):
             only_actionable = query.get("actionable", ["false"])[0].lower() == "true"
             try:
                 from dataclasses import asdict
-                from service.signal_engine import build_signal, render_telegram, render_compact
+                from service.signal_engine import (
+                    build_signal, render_telegram, render_compact,
+                    publish_signal_to_telegram,
+                )
                 from reports.signal_log import log_signal
+                from utils.trax_config import TRAX
 
                 signals = []
                 for t in tickers:
@@ -62,8 +66,23 @@ class Handler(BaseHTTPRequestHandler):
                     if only_actionable and sig.direction == "NEUTRAL":
                         continue
                     log_signal(asdict(sig))  # feedback loop: only LONG/SHORT persist
-                    signals.append({**asdict(sig), "telegram": render_telegram(sig),
-                                     "compact": render_compact(sig)})
+
+                    # Autosend path (TELEGRAM_AUTOSEND=true): post directly
+                    # from Python so delivery doesn't depend on n8n. Only
+                    # actionable signals fire; HOLDs are never pushed.
+                    delivery = None
+                    if TRAX.telegram_autosend and sig.direction in ("LONG", "SHORT"):
+                        d = publish_signal_to_telegram(sig)
+                        delivery = {"ok": d.get("ok"), "error": d.get("error")}
+
+                    entry = {
+                        **asdict(sig),
+                        "telegram": render_telegram(sig),
+                        "compact": render_compact(sig),
+                    }
+                    if delivery is not None:
+                        entry["telegram_delivery"] = delivery
+                    signals.append(entry)
 
                 signals.sort(key=lambda s: s["confidence"], reverse=True)
                 self._respond(200, {
@@ -75,6 +94,7 @@ class Handler(BaseHTTPRequestHandler):
                                or "No actionable signals today.",
                     "telegram": "\n\n".join(s["telegram"] for s in signals)
                                  or "No actionable signals today.",
+                    "autosend": TRAX.telegram_autosend,
                 })
             except Exception as e:  # noqa: BLE001
                 log.error("signal failed: %s", e)

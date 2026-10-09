@@ -257,9 +257,27 @@ export interface RiskResponse {
 export interface TelegramResponse {
   ok: boolean;
   configured: boolean;
+  verify: { ok: boolean; username: string | null; bot_id: number | null; error: string | null };
+  writes_allowed: boolean;
+  autosend: boolean;
   history: Array<{ sent_at: string; chat_id: string | null; ticker: string | null; direction: string | null; body: string; delivered: number; error: string | null; signal_ref: string | null }>;
   recent_signals: Array<{ generated_at: string; ticker: string; direction: string; confidence: number; action: string; outcome: string | null }>;
   delivery_summary: { total: number; delivered: number; failed: number };
+}
+
+export interface TelegramVerifyResponse {
+  ok: boolean;
+  username: string | null;
+  bot_id: number | null;
+  error: string | null;
+  detail: string | null;
+}
+
+export interface TelegramActionResponse {
+  ok: boolean;
+  status_code: number | null;
+  error: string | null;
+  detail: string | null;
 }
 
 export interface SettingsResponse {
@@ -273,6 +291,7 @@ export interface SettingsResponse {
     local_model_name: string;
     local_model_url: string;
     telegram_configured: boolean;
+    telegram_autosend: boolean;
     risk: Record<string, number>;
     live_mode_available: boolean;
     allowed_modes: string[];
@@ -368,6 +387,19 @@ export const api = {
     ),
   risk: () => request<RiskResponse>("/risk/"),
   telegram: () => request<TelegramResponse>("/telegram/"),
+  telegramVerify: () => request<TelegramVerifyResponse>("/telegram/verify"),
+  telegramTest: (text?: string) =>
+    request<TelegramActionResponse>("/telegram/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    }),
+  telegramSend: (text: string, parseMode: string = "Markdown") =>
+    request<TelegramActionResponse>("/telegram/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, parse_mode: parseMode }),
+    }),
   settings: () => request<SettingsResponse>("/settings/"),
   portfolioSummary: (account_label?: string) =>
     request<PortfolioSummary>(`/portfolio/${account_label ? `?account_label=${encodeURIComponent(account_label)}` : ""}`),

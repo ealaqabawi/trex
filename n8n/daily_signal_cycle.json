@@ -1,4 +1,5 @@
 {
+  "__note": "TRAX now sends Telegram messages directly from Python (utils/alerts.py:send_telegram_alert). This workflow is OPTIONAL. If you import it into n8n, replace every REPLACE_WITH_YOUR_CREDENTIAL_ID (one Telegram, five Ollama entries) with your real n8n credential ids, and export TELEGRAM_CHAT_ID in the n8n process env so the chatId expression resolves. Cron shipped in this file is '0 30 9-15 * * 1-5'; PHASES.md references '9-16'. Preferred path: set TELEGRAM_AUTOSEND=true in TRAX's .env and let the Python signal pipeline publish directly.",
   "name": "TRex",
   "nodes": [
     {
