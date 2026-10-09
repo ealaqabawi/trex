@@ -8,9 +8,30 @@ from fastapi import APIRouter
 from utils.config import CONFIG
 from utils.market_time import session_status
 from utils.trax_config import TRAX
+from utils.alerts import telegram_get_me
 from data.options_client import get_options_chain
 
 router = APIRouter()
+
+
+def _telegram_status() -> dict:
+    """Three-tier Telegram status for the status bar:
+    - unconfigured: env vars missing
+    - invalid_token: env vars set but Telegram rejects the token
+    - ok: getMe succeeds (reports the bot's @username)
+    The underlying probe is cached in utils.alerts for 60s so this is
+    cheap to call on every /health poll.
+    """
+    if not (TRAX.telegram_bot_token and TRAX.telegram_chat_id):
+        return {"status": "unconfigured",
+                "detail": "set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env"}
+    verify = telegram_get_me()
+    if verify.get("ok"):
+        return {"status": "ok", "bot_username": verify.get("username"),
+                "detail": f"@{verify.get('username')} reachable via Bot API"}
+    return {"status": "invalid_token",
+            "detail": verify.get("detail") or "Bot API rejected the token",
+            "error": verify.get("error")}
 
 
 @router.get("/")
@@ -51,10 +72,7 @@ def health():
                 "status": "ok" if CONFIG.has_llm else "unavailable",
                 "detail": "local inference only" if not CONFIG.has_llm else "cloud key configured",
             },
-            "telegram": {
-                "status": "ok" if (TRAX.telegram_bot_token and TRAX.telegram_chat_id)
-                           else "unconfigured",
-            },
+            "telegram": _telegram_status(),
         },
         "session": session_status().__dict__,
     }

@@ -57,12 +57,17 @@ export function Settings() {
         <Panel title="Integrations">
           <table className="table">
             <tbody>
-              <KV k="Telegram" v={c.telegram_configured ? "configured" : "not configured"} />
+              <KV
+                k="Telegram"
+                v={c.telegram_configured
+                   ? (c.telegram_autosend ? "configured · autosend ON" : "configured · autosend off")
+                   : "not configured"}
+              />
               <KV k="Overrides" v={d.overrides.mode ?? "none"} />
             </tbody>
           </table>
           <div className="dim" style={{ marginTop: 10, fontSize: 11.5 }}>
-            Writing settings requires <span className="mono">TRAX_ALLOW_SETTINGS_WRITE=true</span>. Live execution never flips on from this surface.
+            Writing settings requires <span className="mono">TRAX_ALLOW_SETTINGS_WRITE=true</span>. Live execution never flips on from this surface. Verify your Telegram bot works end-to-end on the <a href="/telegram">Telegram screen</a>.
           </div>
         </Panel>
       </div>

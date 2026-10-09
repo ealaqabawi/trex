@@ -66,6 +66,12 @@ These are gaps you need to know about:
    avoid touching the Phase 9 code (per the preserve-functionality
    rule). It's a <20-line change when you want it.
 
+   **Resolved:** direct Telegram sender wired. `utils/alerts.send_telegram_alert`
+   posts to the Bot API, `GET /api/v1/telegram/verify` calls getMe,
+   dashboard has Verify/Send/Autosend controls, health probe reports
+   `ok`/`invalid_token`/`unconfigured` with real network check. See
+   `docs/TELEGRAM.md`.
+
 2. **n8n API key is still invalid** (per `PHASES.md:170`). The exported
    workflow in `n8n/daily_signal_cycle.json` still has to be imported
    manually.

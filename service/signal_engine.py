@@ -196,6 +196,16 @@ def render_telegram(sig: Signal) -> str:
     return "\n".join(lines)
 
 
+def publish_signal_to_telegram(sig: Signal) -> dict:
+    """Render `sig` as a Telegram card and post it via utils.alerts.
+    Returns the delivery dict so trigger_server can report the result.
+    No-ops cleanly with the standard not_configured response when the
+    bot token or chat id is missing."""
+    from utils.alerts import send_telegram_alert  # lazy to avoid import cycle on cold start
+    body = render_telegram(sig)
+    return send_telegram_alert(body)
+
+
 def render_compact(sig: Signal) -> str:
     """One dense line per signal for LLM consumption.
 
