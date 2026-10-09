@@ -12,6 +12,12 @@ singleton stays small and the T-REX scripts/tests that import it unchanged.
 import os
 from dataclasses import dataclass, field, asdict
 
+from dotenv import load_dotenv
+
+# TRAX reads its fields at import time, so .env must be loaded first no
+# matter which module imports this one first.
+load_dotenv()
+
 # Live execution requires an explicit opt-in token. If this environment
 # variable is unset or does not match the sentinel, live-mode requests are
 # rejected. There is no path from the UI to flip this on.
