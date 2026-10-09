@@ -231,6 +231,27 @@ def restart_trigger_server() -> str:
     return "restarted" if res.returncode == 0 else f"failed: {res.stderr.strip()[:200]}"
 
 
+BOTFATHER_HINT = (
+    "Get the current token: in Telegram open @BotFather -> /mybots -> your bot\n"
+    "(@MyETRex_bot) -> API Token, and copy it. Don't press 'Revoke current token';\n"
+    "that issues yet another token and invalidates the one you just copied."
+)
+MAX_TOKEN_ATTEMPTS = 3
+
+
+def check_token(token: str) -> tuple[str, str]:
+    """Returns ('ok', username), ('rejected', reason), ('unreachable', reason)
+    or ('malformed', '')."""
+    if not TOKEN_RE.match(token):
+        return "malformed", ""
+    status, body = telegram_call(token, "getMe")
+    if status == 0:
+        return "unreachable", redact(body.get("description", ""), token)
+    if status == 200 and body.get("ok"):
+        return "ok", body["result"].get("username", "?")
+    return "rejected", redact(body.get("description") or f"HTTP {status}", token)
+
+
 def main(argv: list[str] | None = None, input_fn=input, secret_fn=getpass.getpass) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--chat-id", help="Telegram chat id to send to (numeric)")
@@ -245,26 +266,37 @@ def main(argv: list[str] | None = None, input_fn=input, secret_fn=getpass.getpas
     hermes_env = read_env_file(default_hermes_env())
 
     token, token_source = find_token(trex_env, hermes_env)
+    rejected_sources: list[str] = []
     if not token:
         print("No bot token found in ~/trex/.env or ~/.hermes/.env.")
-        print("Get it from @BotFather: /mybots -> @MyETRex_bot -> API Token.")
-        token = secret_fn("Paste the bot token (input hidden): ").strip()
-        token_source = "prompt"
-    if not TOKEN_RE.match(token):
-        print("That doesn't look like a bot token (expected <digits>:<35+ chars>).")
-        return 1
+        print(BOTFATHER_HINT)
+        token, token_source = secret_fn("Paste the bot token (input hidden): ").strip(), "prompt"
 
-    status, body = telegram_call(token, "getMe")
-    if status == 0:
-        explain_unreachable(redact(body.get("description", ""), token))
-        return 1
-    if status != 200 or not body.get("ok"):
-        reason = redact(body.get("description") or f"HTTP {status}", token)
-        print(f"Telegram rejected the token from {token_source}: {reason}")
-        if status == 401:
-            print("It was probably revoked. Get the current one from @BotFather.")
-        return 1
-    username = body["result"].get("username", "?")
+    username = ""
+    for attempt in range(1, MAX_TOKEN_ATTEMPTS + 1):
+        state, detail = check_token(token)
+        if state == "ok":
+            username = detail
+            break
+        if state == "unreachable":
+            explain_unreachable(detail)
+            return 1
+        if state == "malformed":
+            print("That doesn't look like a bot token (expected <digits>:<35+ chars>).")
+        else:
+            print(f"Telegram rejected the token from {token_source}: {detail}")
+            print("That token is revoked or wrong.")
+            if token_source != "prompt":
+                rejected_sources.append(token_source)
+        if attempt == MAX_TOKEN_ATTEMPTS:
+            print("Giving up; nothing was written.")
+            return 1
+        print(BOTFATHER_HINT)
+        token = secret_fn("Paste the current token (input hidden, Enter to quit): ").strip()
+        token_source = "prompt"
+        if not token:
+            print("No token entered; nothing was written.")
+            return 1
     print(f"1/3 Token from {token_source} is valid for @{username}")
 
     chat_id, chat_source = (args.chat_id or "").strip(), "--chat-id"
@@ -292,6 +324,7 @@ def main(argv: list[str] | None = None, input_fn=input, secret_fn=getpass.getpas
         pending = [k for k, v in updates.items() if trex_env.get(k) != v]
         print(f"[dry run] would update {real_path}: {', '.join(pending) or 'nothing'}")
         print("[dry run] no file written, no message sent.")
+        _warn_stale_sources(rejected_sources)
         return 0
 
     if real_path != os.path.abspath(trex_path):
@@ -339,7 +372,19 @@ def main(argv: list[str] | None = None, input_fn=input, secret_fn=getpass.getpas
     print("Restart the dashboard backend too (uvicorn --reload watches .py")
     print("files, not .env): press Ctrl-C in its terminal, then")
     print("  python3 -m uvicorn api.main:app --port 8788 --reload")
+    _warn_stale_sources(rejected_sources)
     return 0
+
+
+def _warn_stale_sources(sources: list[str]) -> None:
+    """This script only edits ~/trex/.env. If it found a revoked token in
+    Hermes's config, Hermes's Telegram gateway is broken too; say so rather
+    than edit another app's config."""
+    if "~/.hermes/.env" in sources:
+        print()
+        print("Note: ~/.hermes/.env still holds the revoked token, so Hermes can't")
+        print("use Telegram either. If you use Hermes on Telegram, put the new token")
+        print("in TELEGRAM_BOT_TOKEN there and restart the Hermes gateway.")
 
 
 if __name__ == "__main__":
