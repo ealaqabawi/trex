@@ -95,11 +95,19 @@ than fabricating one. Retry in a minute.
 Expected — the Polygon key provided in `.env.example` is a placeholder.
 yfinance is the primary and the detail string says so.
 
-**`SPX` has no options.**
-Yahoo serves SPX as `^GSPC` and does NOT list its options. The
-dashboard charts the index via `data/quotes.py:_INDEX_PROXIES`, but
-the Options screen falls back to SPY (the tradeable proxy). This is
-labelled in the UI.
+**Enabling SPX / index chains (SPX, NDX, RUT, VIX, DJX).**
+Yahoo doesn't serve these at all. The dashboard treats them as
+first-class once either of the following keys is set in `.env`:
+
+- `TRADIER_API_KEY` — free developer account at developer.tradier.com,
+  covers SPX monthlies, SPXW weeklies, and 0DTE. Set `TRADIER_SANDBOX=true`
+  to use the sandbox host without a funded brokerage account.
+- `MARKETDATA_APP_TOKEN` — free tier (100 req/day) at marketdata.app,
+  Greeks and index support included.
+
+With neither set, the Options screen reports "unavailable" for SPX
+and the top status bar's `index_options_feed` subsystem reads
+`unconfigured`. The dashboard will NOT silently substitute SPY data.
 
 **`npm run build` warns about chunk size.**
 Expected; this is a dense data-heavy UI. Not a failure.

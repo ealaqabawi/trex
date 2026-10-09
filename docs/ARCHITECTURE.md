@@ -34,11 +34,33 @@ What was added is a dashboard-facing API, a persistent memory layer, a
 └───────────────────────┘  └─────────────────────┘  └───────────────┘
                                │
 ┌────────────────────────────────────────────────────────────────────┐
-│  data/              yfinance primary · Tradier fallback · Polygon    │
-│                      (Polygon price feed is NOT_AUTHORIZED on the    │
-│                      current key — documented in PHASES.md)          │
+│  data/              Options adapter stack:                           │
+│                       equity symbols → yfinance → Tradier → MarketData│
+│                       index  symbols → Tradier → MarketData.app      │
+│                     Price feed: yfinance (Polygon NOT_AUTHORIZED).   │
 └────────────────────────────────────────────────────────────────────┘
 ```
+
+### Options source routing
+
+`data/options_client.get_options_chain(ticker)` picks the adapter chain
+by symbol class:
+
+| symbol class       | order of attempts                               |
+|--------------------|-------------------------------------------------|
+| Equity (SPY, NVDA) | yfinance → Tradier → MarketData.app             |
+| Index (SPX, NDX…)  | Tradier → MarketData.app  (yfinance skipped)    |
+
+All three adapters normalize to the same per-contract dict shape
+(`contract_type`, `bid`, `ask`, `lastPrice`, `strike`, `volume`,
+`openInterest`, `impliedVolatility`, `contractSymbol`). Downstream
+code — the scanner, the chain endpoint, the whale-flow module — stays
+source-agnostic.
+
+Index symbol list is `data.options_client.INDEX_SYMBOLS`:
+`{SPX, NDX, RUT, VIX, DJX}`. SPXW weekly expiries (including 0DTE)
+are returned under the parent SPX symbol by both Tradier and
+MarketData.app, so no extra routing is needed for 0DTE SPX.
 
 ## Operating modes
 
