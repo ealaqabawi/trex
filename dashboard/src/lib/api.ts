@@ -75,6 +75,13 @@ export interface OverviewResponse {
   recent_alerts: Array<{ created_at: string; severity: string; event_type: string; ticker?: string; detail: string }>;
   recent_agent_activity: Array<{ started_at: string; finished_at: string | null; agent: string; task: string; status: string }>;
   universe: string[];
+  portfolio: {
+    position_count: number;
+    gross_market_value: number;
+    net_market_value: number;
+    unrealized_pnl: number;
+    imported_at: string | null;
+  };
 }
 
 export interface MarketSnapshotRow {

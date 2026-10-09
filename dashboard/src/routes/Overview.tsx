@@ -30,16 +30,19 @@ export function Overview() {
           sub={`of ${fmtInt(d.scanner_candidate_count)} scanned candidates (confidence ≥ 60)`}
         />
         <StatCard
+          title="Portfolio"
+          value={d.portfolio.position_count > 0 ? fmtInt(d.portfolio.position_count) + " pos" : "—"}
+          sub={d.portfolio.imported_at
+            ? `net $${d.portfolio.net_market_value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+            : "no CSV imported yet — see Portfolio screen"}
+          tone={d.portfolio.unrealized_pnl > 0 ? "up" : d.portfolio.unrealized_pnl < 0 ? "down" : undefined}
+          footnote={d.portfolio.imported_at ? `Unrealized $${d.portfolio.unrealized_pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : null}
+        />
+        <StatCard
           title="Signal hit rate"
           value={d.signal_history.hit_rate === null ? "n/a" : fmtPct(d.signal_history.hit_rate * 100)}
           sub={`${fmtInt(d.signal_history.total_published)} published, ${fmtInt(d.signal_history.unresolved)} unresolved`}
           footnote={d.signal_history.hit_rate_note}
-        />
-        <StatCard
-          title="Paper trading"
-          value={d.paper_trading.real_fills > 0 ? `${d.paper_trading.real_fills} fills` : "0 fills"}
-          sub={`${d.paper_trading.dry_run_orders} dry-run · ${d.paper_trading.buy_count}/${d.paper_trading.sell_count} B/S`}
-          footnote={d.paper_trading.note}
         />
         <StatCard
           title="Market session"

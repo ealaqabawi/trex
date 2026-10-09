@@ -14,6 +14,7 @@ from utils.market_time import session_status
 from reports.performance import build_report
 from reports.signal_log import load_signals, recent_hit_rate
 from memory.repository import list_agent_runs, list_risk_events
+from memory.portfolio import portfolio_summary
 from scanner import scan_universe
 
 router = APIRouter()
@@ -34,6 +35,7 @@ def overview():
 
     recent_agents = list_agent_runs(limit=8)
     recent_risk = list_risk_events(limit=5)
+    portfolio = portfolio_summary()
 
     return {
         "ok": True,
@@ -67,6 +69,13 @@ def overview():
             }
             for e in recent_risk
         ],
+        "portfolio": {
+            "position_count": portfolio["position_count"],
+            "gross_market_value": portfolio["gross_market_value"],
+            "net_market_value": portfolio["net_market_value"],
+            "unrealized_pnl": portfolio["unrealized_pnl"],
+            "imported_at": portfolio["imported_at"],
+        },
         "recent_agent_activity": [
             {
                 "started_at": r["started_at"], "finished_at": r["finished_at"],
