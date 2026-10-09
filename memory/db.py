@@ -107,6 +107,35 @@ CREATE TABLE IF NOT EXISTS system_state (
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS portfolio_positions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    imported_at TEXT NOT NULL,
+    source TEXT NOT NULL,
+    account_label TEXT,
+    symbol TEXT NOT NULL,
+    instrument_type TEXT,
+    quantity REAL NOT NULL,
+    avg_cost REAL,
+    market_price REAL,
+    market_value REAL,
+    unrealized_pnl REAL,
+    currency TEXT,
+    raw_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_portfolio_imported ON portfolio_positions(imported_at);
+CREATE INDEX IF NOT EXISTS idx_portfolio_symbol ON portfolio_positions(symbol, imported_at);
+
+CREATE TABLE IF NOT EXISTS portfolio_imports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    imported_at TEXT NOT NULL,
+    source TEXT NOT NULL,
+    filename TEXT,
+    row_count INTEGER NOT NULL,
+    account_label TEXT,
+    note TEXT
+);
 """
 
 

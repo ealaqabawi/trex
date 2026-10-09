@@ -18,6 +18,7 @@ const NAV: NavItem[] = [
   { to: "/strategy", label: "Strategy Lab" },
   { to: "/agents", label: "AI Agents" },
   { to: "/risk", label: "Risk Center" },
+  { to: "/portfolio", label: "Portfolio" },
   { to: "/telegram", label: "Telegram" },
   { to: "/settings", label: "Settings" },
 ];

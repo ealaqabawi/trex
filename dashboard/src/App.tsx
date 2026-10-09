@@ -10,6 +10,7 @@ import { AgentsPage } from "./routes/Agents";
 import { RiskCenter } from "./routes/RiskCenter";
 import { TelegramMonitor } from "./routes/TelegramMonitor";
 import { Settings } from "./routes/Settings";
+import { Portfolio } from "./routes/Portfolio";
 
 export function App() {
   return (
@@ -26,6 +27,7 @@ export function App() {
         <Route path="/agents" element={<AgentsPage />} />
         <Route path="/risk" element={<RiskCenter />} />
         <Route path="/telegram" element={<TelegramMonitor />} />
+        <Route path="/portfolio" element={<Portfolio />} />
         <Route path="/settings" element={<Settings />} />
       </Routes>
     </Shell>
