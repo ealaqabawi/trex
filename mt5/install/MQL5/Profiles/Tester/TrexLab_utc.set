@@ -1,0 +1,6 @@
+Mode=0
+Tf=5
+ServerToUtcHours=0
+AlertsOn=false
+PushToPhone=false
+WriteCsv=true

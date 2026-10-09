@@ -1,0 +1,323 @@
+{
+  "name": "Trex Universal - n8n Scanner (Control Draft)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "20 */5 * * * *"
+            }
+          ]
+        }
+      },
+      "name": "Every 5 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -48,
+        -256
+      ],
+      "id": "9ed9f0e3-58a0-4172-b304-bb09e03b0548"
+    },
+    {
+      "parameters": {
+        "jsCode": "// The 10 Trex markets, picked 2026-09-29 from a cost-inclusive test of 22 Capital.com markets.\n// Yahoo-style keys; the local price server maps them to Capital.com: GC=F->GOLD, BTC-USD->BTCUSD, GBPUSD=X->GBPUSD,\n// ETH-USD->ETHUSD, CAD=X->USDCAD, ^GDAXI->DE40, CHF=X->USDCHF, BZ=F->OIL_BRENT, CL=F->OIL_CRUDE, HG=F->COPPER.\nconst symbols = ['GC=F', 'BTC-USD', 'GBPUSD=X', 'ETH-USD', 'CAD=X', '^GDAXI', 'CHF=X', 'BZ=F', 'CL=F', 'HG=F'];\nreturn symbols.map(symbol => ({ json: { symbol } }));\n"
+      },
+      "name": "Watchlist",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        176,
+        -256
+      ],
+      "id": "3b51d2bd-c1ce-485d-9199-abd02d86563a"
+    },
+    {
+      "parameters": {
+        "url": "={{ 'http://127.0.0.1:8787/candles?symbol=' + encodeURIComponent($json.symbol) + '&interval=5m&range=5d' }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 300
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "name": "Get 5m candles",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        400,
+        -256
+      ],
+      "id": "b80104b8-00a5-445a-9306-54925031f989",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Trex Universal scanner - same rules and default settings as the TradingView strategy \"Trex Universal\".\n// Checks closed 5-minute candles from Capital.com (via the local T-REX trigger server; Yahoo/yfinance fallback) and sends each NEW BUY/SELL to Telegram (once).\nconst P = { len: 20, win: 3, rr: 2, buf: 0.25, maxRisk: 2, cool: 3, flip: false, useTrend: true, emaLen: 200, useVol: false, volMult: 1.3, tfMin: 5 };\nconst NAMES = { 'CL=F': 'Crude Oil', 'BZ=F': 'Brent Oil', 'GC=F': 'Gold', 'SI=F': 'Silver', 'HG=F': 'Copper', 'NG=F': 'Natural Gas', 'BTC-USD': 'Bitcoin', 'ETH-USD': 'Ethereum', 'GBPUSD=X': 'GBP/USD', 'EURUSD=X': 'EUR/USD', 'CAD=X': 'USD/CAD', 'CHF=X': 'USD/CHF', 'JPY=X': 'USD/JPY', 'AUDUSD=X': 'AUD/USD', '^GDAXI': 'Germany 40', '^FTSE': 'UK 100', 'ES=F': 'US 500', 'NQ=F': 'US Tech 100', 'YM=F': 'US Wall Street 30' };\nconst manual = ['test', 'manual'].includes($execution.mode);\nconst store = $getWorkflowStaticData('global');\nif (!store.last) store.last = {};\nconst nowSec = Date.now() / 1000;\nconst num = v => String(Number(Number(v).toPrecision(7)));\nconst utc = t => new Date(t * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';\n\nfunction scan(bars) {\n  const n = bars.length;\n  const atr = new Array(n).fill(null), ema = new Array(n).fill(null), volAvg = new Array(n).fill(null);\n  let trSum = 0;\n  for (let i = 0; i < n; i++) {\n    const b = bars[i];\n    const tr = i === 0 ? b.h - b.l : Math.max(b.h - b.l, Math.abs(b.h - bars[i - 1].c), Math.abs(b.l - bars[i - 1].c));\n    if (i < 14) { trSum += tr; if (i === 13) atr[i] = trSum / 14; }\n    else atr[i] = (atr[i - 1] * 13 + tr) / 14;\n  }\n  const a = 2 / (P.emaLen + 1);\n  for (let i = 0; i < n; i++) ema[i] = i === 0 ? bars[i].c : a * bars[i].c + (1 - a) * ema[i - 1];\n  let vs = 0;\n  for (let i = 0; i < n; i++) { vs += bars[i].v; if (i >= 20) vs -= bars[i - 20].v; if (i >= 19) volAvg[i] = vs / 20; }\n  let upLvl = null, upExt = null, upBar = null, dnLvl = null, dnExt = null, dnBar = null, lastSig = null;\n  let pos = 0, stopPx = null, tgtPx = null, pending = null;\n  const sigs = [];\n  for (let i = 0; i < n; i++) {\n    const b = bars[i];\n    // fills during this candle: pending entry at the open, then stop / target\n    if (pending) { pos = pending.side; stopPx = pending.sl; tgtPx = pending.tp; pending = null; }\n    if (pos !== 0) {\n      const hitStop = pos > 0 ? b.l <= stopPx : b.h >= stopPx;\n      const hitTgt = pos > 0 ? b.h >= tgtPx : b.l <= tgtPx;\n      if (hitStop || hitTgt) pos = 0;\n    }\n    if (i < P.len || atr[i] === null) continue;\n    let hiRef = -Infinity, loRef = Infinity;\n    for (let k = i - P.len; k < i; k++) { if (bars[k].h > hiRef) hiRef = bars[k].h; if (bars[k].l < loRef) loRef = bars[k].l; }\n    if (b.h > hiRef) {\n      if (upBar === null || i - upBar > P.win) { upLvl = hiRef; upExt = b.h; } else upExt = Math.max(upExt, b.h);\n      upBar = i;\n    }\n    if (b.l < loRef) {\n      if (dnBar === null || i - dnBar > P.win) { dnLvl = loRef; dnExt = b.l; } else dnExt = Math.min(dnExt, b.l);\n      dnBar = i;\n    }\n    const gapOk = lastSig === null || i - lastSig > P.cool;\n    const posOk = P.flip || pos === 0;\n    const volOk = !P.useVol || (volAvg[i] !== null && b.v > volAvg[i] * P.volMult);\n    const sell = upBar !== null && i - upBar <= P.win && b.c < upLvl && b.c < b.o && volOk && gapOk && posOk && pos >= 0 && (!P.useTrend || b.c < ema[i]);\n    const buy = dnBar !== null && i - dnBar <= P.win && b.c > dnLvl && b.c > b.o && volOk && gapOk && posOk && pos <= 0 && (!P.useTrend || b.c > ema[i]);\n    if (sell) {\n      const sl = upExt + P.buf * atr[i], risk = sl - b.c;\n      if (risk > 0 && risk <= P.maxRisk * atr[i]) {\n        const tp = b.c - P.rr * risk;\n        pending = { side: -1, sl, tp }; upBar = null; lastSig = i;\n        sigs.push({ t: b.t, signal: 'SELL', price: b.c, sl, tp });\n      }\n    }\n    if (buy) {\n      const sl = dnExt - P.buf * atr[i], risk = b.c - sl;\n      if (risk > 0 && risk <= P.maxRisk * atr[i]) {\n        const tp = b.c + P.rr * risk;\n        pending = { side: 1, sl, tp }; dnBar = null; lastSig = i;\n        sigs.push({ t: b.t, signal: 'BUY', price: b.c, sl, tp });\n      }\n    }\n  }\n  return sigs;\n}\n\nconst out = [];\nconst lines = [];\nfor (const item of $input.all()) {\n  const res = item.json && item.json.chart && item.json.chart.result && item.json.chart.result[0];\n  if (!res || !res.timestamp || !res.indicators) {\n    const e = item.json && item.json.error;\n    lines.push('⚠️ no data' + (e ? ' (' + (e.status || e.httpCode || e.message || 'error') + ')' : ''));\n    continue;\n  }\n  const sym = res.meta.symbol;\n  const name = NAMES[sym] || sym;\n  const q = res.indicators.quote[0];\n  const bars = [];\n  for (let k = 0; k < res.timestamp.length; k++) {\n    const t = res.timestamp[k];\n    if (q.open[k] == null || q.high[k] == null || q.low[k] == null || q.close[k] == null) continue;\n    if (t + P.tfMin * 60 > nowSec + 5) continue; // candle still forming\n    bars.push({ t, o: q.open[k], h: q.high[k], l: q.low[k], c: q.close[k], v: (q.volume && q.volume[k]) || 0 });\n  }\n  if (bars.length < 250) { lines.push('⚠️ ' + name + ': only ' + bars.length + ' candles'); continue; }\n  const sigs = scan(bars);\n  const last = bars[bars.length - 1];\n  const s = sigs.length ? sigs[sigs.length - 1] : null;\n  if (manual) {\n    lines.push('• ' + name + ' [' + sym + ']: ' + bars.length + ' candles, last close ' + utc(last.t + 300) + ', ' + sigs.length + ' signals in ' + Math.max(1, Math.round((last.t - bars[0].t) / 86400)) + ' days' + (s ? ', latest ' + s.signal + ' ' + utc(s.t + 300) : '') + ', source ' + (res.meta.source || 'yahoo'));\n    continue;\n  }\n  const fresh = s && s.t === last.t && nowSec - (last.t + P.tfMin * 60) < 15 * 60;\n  if (fresh && store.last[sym] !== s.t) {\n    store.last[sym] = s.t;\n    const icon = s.signal === 'BUY' ? '🟢' : '🔴';\n    out.push({ json: { text: [icon + ' ' + s.signal + '  ' + name + ' [' + sym + ']', 'Timeframe: 5m', 'Entry: ' + num(s.price), 'Stop loss: ' + num(s.sl), 'Take profit: ' + num(s.tp), 'Trex Universal (n8n) · ' + utc(s.t + 300)].join('\\n'), signal: s.signal, ticker: sym, name, price: s.price, sl: s.sl, tp: s.tp, time: utc(s.t + 300), source: res.meta.source || 'yahoo' } });\n  }\n}\nif (manual) return [{ json: { text: ['🧪 Trex scanner test (not a trade signal)'].concat(lines, ['Live alerts will arrive here for each new BUY/SELL.']).join('\\n'), test: true } }];\nreturn out;"
+      },
+      "name": "Trex Signals",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        -256
+      ],
+      "id": "2f544adb-f206-4065-a353-3ddc05d770e2"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8642/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'hermes-agent', messages: [ { role: 'system', content: \"You are Hermes, Emad's trading analyst for his Trex Universal strategy. Load and follow the trex-universal skill (section 'When n8n sends you a new signal'). Signal prices are Capital.com mid prices; the live Capital.com quote (bid/offer, spread, market status, % of Capital.com clients long/short) is included - use it and never invent numbers. Analysis only - never place, modify or suggest automatic orders. First line must be 'Verdict: TAKE', 'Verdict: CAUTION' or 'Verdict: SKIP'. Plain text, max 4 short lines, under 60 words.\" }, { role: 'user', content: $('Trex Signals').item.json.test ? 'This is a test of the Trex scanner pipeline. In one short line: confirm you received it, name the model you are running on, and say whether this Capital.com quote is live: ' + JSON.stringify($json) : 'New Trex Universal signal from the n8n scanner: ' + JSON.stringify({ signal: $('Trex Signals').item.json.signal, ticker: $('Trex Signals').item.json.ticker, name: $('Trex Signals').item.json.name, price: $('Trex Signals').item.json.price, sl: $('Trex Signals').item.json.sl, tp: $('Trex Signals').item.json.tp, time: $('Trex Signals').item.json.time, price_source: $('Trex Signals').item.json.source }) + ' | Live Capital.com quote: ' + JSON.stringify($json) } ] }) }}",
+        "options": {
+          "timeout": 150000
+        }
+      },
+      "name": "Ask Hermes (AI brain)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1056,
+        -256
+      ],
+      "id": "342a9f68-a431-4e4f-8612-e3eb109029cc",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "kBFAiHBxIycohbVI",
+          "name": "Hermes API (Trex brain)"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Trex alert card for Telegram (HTML): name, BUY/SELL, entry, target + Hermes one-word verdict.\n// Prices come from Capital.com via the local trigger server; a warning line appears only if Yahoo was used instead.\nconst sigs = $('Trex Signals').all();\nconst quotes = $('Capital.com quote').all();\n// Skip alerts that are too expensive to trade: Capital.com spread above 20% of the stop distance, or market not open.\nconst MAX_SPREAD_OF_STOP = 0.2;\nconst esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst px = v => {\n  const n = Number(v);\n  if (!isFinite(n)) return esc(v);\n  if (Math.abs(n) >= 1000) return n.toLocaleString('en-US', { maximumFractionDigits: 2 });\n  return Number(n.toPrecision(Math.abs(n) >= 10 ? 5 : 6)).toLocaleString('en-US', { maximumFractionDigits: 6 });\n};\nconst LINE = '━━━━━━━━━━━━━━';\nconst MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];\nconst VERDICT = { TAKE: '✅ TAKE', CAUTION: '⚠️ CAUTION', SKIP: '⛔ SKIP' };\nconst reply = r => {\n  const c = r && r.choices && r.choices[0] && r.choices[0].message && r.choices[0].message.content;\n  return typeof c === 'string' ? c.trim() : '';\n};\nreturn $input.all().map((item, i) => {\n  const s = (sigs[i] || sigs[0]).json;\n  const ai = reply(item.json);\n  const m = ai.match(/verdict\\W*(TAKE|CAUTION|SKIP)/i) || ai.match(/\\b(TAKE|CAUTION|SKIP)\\b/);\n  const verdict = m ? VERDICT[m[1].toUpperCase()] : '';\n  if (s.test) {\n    const lines = String(s.text).split('\\n');\n    const rows = lines\n      .map(l => l.match(/^• (.+?) \\[.+?\\]: .*?(\\d+) signals in \\d+ days, latest (BUY|SELL) \\d{4}-(\\d\\d)-(\\d\\d) (\\d\\d:\\d\\d) UTC/))\n      .filter(Boolean)\n      .map(r => (r[3] === 'BUY' ? '🟢' : '🔴') + ' <b>' + esc(r[1]) + '</b>  ·  last ' + r[3] + ' ' + r[5] + ' ' + MON[+r[4] - 1] + ' ' + r[6] + ' UTC');\n    const srcs = lines.map(l => (l.match(/, source (\\S+)$/) || [])[1]).filter(Boolean);\n    const feed = srcs.length && srcs.every(x => x === 'capital.com')\n      ? '💱 Prices: <b>Capital.com live</b>'\n      : '⚠️ Prices: <b>Yahoo</b> (Capital.com not connected)';\n    const text = ['🧪 <b>TREX SCANNER · TEST</b>', LINE].concat(rows, [LINE, feed,\n      ai ? '🤖 AI brain: <b>✅ online</b>' : '🤖 AI brain: <b>⚠️ not answering</b>',\n      '<i>Live BUY / SELL alerts will arrive here.</i>']).join('\\n');\n    return { json: { text } };\n  }\n  const q = (quotes[i] && quotes[i].json) || {};\n  const risk = Math.abs(Number(s.price) - Number(s.sl));\n  if (q.status && q.status !== 'TRADEABLE') return null;\n  if (q.spread != null && risk > 0 && Number(q.spread) / risk > MAX_SPREAD_OF_STOP) return null;\n  const buy = String(s.signal).toUpperCase() === 'BUY';\n  const lines = [\n    (buy ? '🟢' : '🔴') + ' <b>' + (buy ? 'BUY' : 'SELL') + '  ·  ' + esc(s.name || s.ticker) + '</b>',\n    LINE,\n    '▶️ Entry:  <b>' + px(s.price) + '</b>',\n    '🎯 Target:  <b>' + px(s.tp) + '</b>',\n    LINE,\n    verdict ? '🤖 AI check:  <b>' + verdict + '</b>' : '🤖 AI check:  <i>unavailable</i>',\n  ];\n  if (s.source && s.source !== 'capital.com') lines.push('⚠️ <i>Yahoo price - Capital.com feed offline</i>');\n  return { json: { text: lines.join('\\n'), signal: s.signal, ticker: s.ticker, name: s.name, price: s.price, sl: s.sl, tp: s.tp, time: s.time, source: s.source, verdict: m ? m[1].toUpperCase() : null, spread: q.spread ?? null } };\n}).filter(Boolean);\n"
+      },
+      "name": "Add Hermes note",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        -256
+      ],
+      "id": "4834c980-c8eb-46c3-aff6-ad1ad0fe5e0c"
+    },
+    {
+      "parameters": {
+        "chatId": "1156952811",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "name": "Send to Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1504,
+        -256
+      ],
+      "id": "012e2904-a8df-4ae7-91d3-edc984170b7c",
+      "webhookId": "6515a498-f721-443c-92dc-359a66631ece",
+      "credentials": {
+        "telegramApi": {
+          "id": "0NXowe6hwds34Hk6",
+          "name": "Trex bot (current token)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ 'http://127.0.0.1:8787/quote?symbol=' + encodeURIComponent($json.ticker || 'CL=F') }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "33c56418-6e0c-47e0-99cd-c054fd26859f",
+      "name": "Capital.com quote",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        832,
+        -256
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8787/alerts/log",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "062a70fc-7baa-47e5-87f3-a6536434615c",
+      "name": "Log alert (forward test)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1504,
+        -64
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "8ec6ab29-609f-41b5-a879-10f96f401575",
+      "name": "Check scanner control",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        176,
+        -512
+      ],
+      "parameters": {
+        "url": "http://127.0.0.1:8787/control/gate",
+        "options": {
+          "timeout": 5000
+        }
+      }
+    },
+    {
+      "id": "50f89d68-1913-41d4-b545-02bd99be2285",
+      "name": "Continue when enabled",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        -512
+      ],
+      "parameters": {
+        "jsCode": "const control = $input.first()?.json ?? {};\nif (control.enabled !== true) return [];\nreturn [{ json: { scanner_enabled: true } }];\n"
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Every 5 minutes": {
+      "main": [
+        [
+          {
+            "node": "Check scanner control",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Watchlist": {
+      "main": [
+        [
+          {
+            "node": "Get 5m candles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get 5m candles": {
+      "main": [
+        [
+          {
+            "node": "Trex Signals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trex Signals": {
+      "main": [
+        [
+          {
+            "node": "Capital.com quote",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask Hermes (AI brain)": {
+      "main": [
+        [
+          {
+            "node": "Add Hermes note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add Hermes note": {
+      "main": [
+        [
+          {
+            "node": "Send to Telegram",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log alert (forward test)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Capital.com quote": {
+      "main": [
+        [
+          {
+            "node": "Ask Hermes (AI brain)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check scanner control": {
+      "main": [
+        [
+          {
+            "node": "Continue when enabled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Continue when enabled": {
+      "main": [
+        [
+          {
+            "node": "Watchlist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "nodeGroups": [],
+  "tags": []
+}

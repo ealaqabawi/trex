@@ -1,0 +1,289 @@
+#property version   "1.00"
+#property description "Trex scalp research EA. Signals only; never sends orders."
+
+input ENUM_TIMEFRAMES SignalTimeframe = PERIOD_M1;
+input int RangeLookback = 20;
+input int SweepWindowBars = 3;
+input int AtrPeriod = 14;
+input int TrendEmaPeriod = 200;
+input double StopBufferAtr = 0.25;
+input double RewardRisk = 2.0;
+input double MaxStopAtr = 2.0;
+input double MaxSpreadOfRisk = 0.10;
+input int CooldownBars = 3;
+input int HistoryBars = 1500;
+input bool PushToPhone = true;   // also send each signal to the MT5 mobile app (set your MetaQuotes ID in Tools > Options > Notifications)
+
+struct ScalpSignal
+  {
+   bool found;
+   bool is_buy;
+   datetime bar_time;
+   double swept_level;
+   double entry;
+   double stop;
+   double target;
+   double atr;
+   double spread_ratio;
+  };
+
+struct VirtualTrade
+  {
+   bool open;
+   bool is_buy;
+   double entry;
+   double stop;
+   double target;
+  };
+
+datetime last_seen_bar = 0;
+datetime last_alerted_bar = 0;
+
+int OnInit()
+  {
+   if(RangeLookback < 2 || SweepWindowBars < 1 || AtrPeriod < 2 ||
+      TrendEmaPeriod < 2 || RewardRisk <= 0.0 || MaxStopAtr <= 0.0 ||
+      MaxSpreadOfRisk <= 0.0 || HistoryBars < TrendEmaPeriod + RangeLookback + AtrPeriod + 10)
+     {
+      Print("Invalid inputs. Increase HistoryBars and use positive strategy settings.");
+      return INIT_PARAMETERS_INCORRECT;
+     }
+
+   Print("Trex scalp signal monitor initialized for ", _Symbol, " ", EnumToString(SignalTimeframe),
+         ". Signal-only mode: no broker orders are sent.");
+   return INIT_SUCCEEDED;
+  }
+
+void OnTick()
+  {
+   datetime current_bar = iTime(_Symbol, SignalTimeframe, 0);
+   if(current_bar == 0 || current_bar == last_seen_bar)
+      return;
+   last_seen_bar = current_bar;
+
+   MqlRates rates[];
+   ArraySetAsSeries(rates, false);
+   int copied = CopyRates(_Symbol, SignalTimeframe, 0, HistoryBars, rates);
+   if(copied < TrendEmaPeriod + RangeLookback + AtrPeriod + 5)
+     {
+      Print("Waiting for more ", EnumToString(SignalTimeframe), " history: ", copied,
+            " bars; need at least ", TrendEmaPeriod + RangeLookback + AtrPeriod + 5, ".");
+      return;
+     }
+
+   int last_closed = copied - 2;
+   double atr_values[];
+   double ema_values[];
+   if(!BuildIndicators(rates, copied, atr_values, ema_values))
+     {
+      Print("Could not calculate ATR/EMA from available history.");
+      return;
+     }
+
+   ScalpSignal signal;
+   if(!FindCurrentSignal(rates, atr_values, ema_values, last_closed, signal))
+      return;
+   if(signal.bar_time != rates[last_closed].time || signal.bar_time <= last_alerted_bar)
+      return;
+
+   MqlTick tick;
+   if(!SymbolInfoTick(_Symbol, tick) || tick.ask <= 0.0 || tick.bid <= 0.0)
+     {
+      Print("Signal skipped: current bid/ask unavailable.");
+      last_alerted_bar = signal.bar_time;
+      return;
+     }
+
+   double risk = MathAbs(signal.entry - signal.stop);
+   double spread = tick.ask - tick.bid;
+   signal.spread_ratio = risk > 0.0 ? spread / risk : DBL_MAX;
+   last_alerted_bar = signal.bar_time;
+
+   if(risk <= 0.0 || signal.spread_ratio > MaxSpreadOfRisk)
+     {
+      Print("Signal skipped for ", _Symbol, ": spread/risk=", DoubleToString(signal.spread_ratio * 100.0, 1),
+            "% exceeds ", DoubleToString(MaxSpreadOfRisk * 100.0, 1), "%.");
+      return;
+     }
+
+   string direction = signal.is_buy ? "BUY" : "SELL";
+   string message = StringFormat(
+      "TREX SIGNAL ONLY | %s %s %s | swept %s | entry %s | SL %s | TP %s | stop %.2f ATR | spread %.1f%% of risk",
+      _Symbol, EnumToString(SignalTimeframe), direction, PriceText(signal.swept_level),
+      PriceText(signal.entry), PriceText(signal.stop), PriceText(signal.target),
+      risk / signal.atr, signal.spread_ratio * 100.0);
+   Print(message);
+   Alert(message);
+   if(PushToPhone && TerminalInfoInteger(TERMINAL_NOTIFICATIONS_ENABLED))
+     {
+      if(!SendNotification(StringSubstr(message, 0, 255)))
+         Print("Push notification failed, error ", GetLastError());
+     }
+  }
+
+bool BuildIndicators(const MqlRates &rates[], const int count, double &atr_values[], double &ema_values[])
+  {
+   if(count <= AtrPeriod || count <= TrendEmaPeriod)
+      return false;
+
+   ArrayResize(atr_values, count);
+   ArrayResize(ema_values, count);
+   ArrayInitialize(atr_values, 0.0);
+
+   ema_values[0] = rates[0].close;
+   double alpha = 2.0 / (TrendEmaPeriod + 1.0);
+   for(int i = 1; i < count; i++)
+      ema_values[i] = alpha * rates[i].close + (1.0 - alpha) * ema_values[i - 1];
+
+   double tr_sum = 0.0;
+   for(int i = 1; i <= AtrPeriod; i++)
+      tr_sum += TrueRange(rates, i);
+   atr_values[AtrPeriod] = tr_sum / AtrPeriod;
+
+   for(int i = AtrPeriod + 1; i < count; i++)
+      atr_values[i] = (atr_values[i - 1] * (AtrPeriod - 1.0) + TrueRange(rates, i)) / AtrPeriod;
+
+   return true;
+  }
+
+double TrueRange(const MqlRates &rates[], const int index)
+  {
+   double high_low = rates[index].high - rates[index].low;
+   double high_previous = MathAbs(rates[index].high - rates[index - 1].close);
+   double low_previous = MathAbs(rates[index].low - rates[index - 1].close);
+   return MathMax(high_low, MathMax(high_previous, low_previous));
+  }
+
+bool FindCurrentSignal(const MqlRates &rates[], const double &atr_values[], const double &ema_values[],
+                       const int last_closed, ScalpSignal &result)
+  {
+   result.found = false;
+   result.bar_time = 0;
+   result.spread_ratio = 0.0;
+
+   int first = RangeLookback;
+   if(AtrPeriod + 1 > first)
+      first = AtrPeriod + 1;
+   int up_bar = -1;
+   int down_bar = -1;
+   double up_level = 0.0;
+   double up_extreme = 0.0;
+   double down_level = 0.0;
+   double down_extreme = 0.0;
+   int last_signal_bar = -1000000;
+   VirtualTrade trade;
+   trade.open = false;
+   trade.is_buy = false;
+   trade.entry = 0.0;
+   trade.stop = 0.0;
+   trade.target = 0.0;
+
+   for(int i = first; i <= last_closed; i++)
+     {
+      if(atr_values[i] <= 0.0)
+         continue;
+
+      if(trade.open)
+        {
+         bool hit_stop = trade.is_buy ? rates[i].low <= trade.stop : rates[i].high >= trade.stop;
+         bool hit_target = trade.is_buy ? rates[i].high >= trade.target : rates[i].low <= trade.target;
+         if(hit_stop || hit_target)
+            trade.open = false; // Conservative when both levels trade inside one candle.
+        }
+
+      double range_high = rates[i - RangeLookback].high;
+      double range_low = rates[i - RangeLookback].low;
+      for(int j = i - RangeLookback + 1; j < i; j++)
+        {
+         range_high = MathMax(range_high, rates[j].high);
+         range_low = MathMin(range_low, rates[j].low);
+        }
+
+      if(rates[i].high > range_high)
+        {
+         if(up_bar < 0 || i - up_bar > SweepWindowBars)
+           {
+            up_level = range_high;
+            up_extreme = rates[i].high;
+           }
+         else
+            up_extreme = MathMax(up_extreme, rates[i].high);
+         up_bar = i;
+        }
+
+      if(rates[i].low < range_low)
+        {
+         if(down_bar < 0 || i - down_bar > SweepWindowBars)
+           {
+            down_level = range_low;
+            down_extreme = rates[i].low;
+           }
+         else
+            down_extreme = MathMin(down_extreme, rates[i].low);
+         down_bar = i;
+        }
+
+      bool cooldown_ok = i - last_signal_bar > CooldownBars;
+      bool can_signal = !trade.open && cooldown_ok;
+      bool sell = can_signal && up_bar >= 0 && i - up_bar <= SweepWindowBars &&
+                  rates[i].close < up_level && rates[i].close < rates[i].open &&
+                  rates[i].close < ema_values[i];
+      bool buy = can_signal && down_bar >= 0 && i - down_bar <= SweepWindowBars &&
+                 rates[i].close > down_level && rates[i].close > rates[i].open &&
+                 rates[i].close > ema_values[i];
+
+      if(sell)
+        {
+         double stop = up_extreme + StopBufferAtr * atr_values[i];
+         double risk = stop - rates[i].close;
+         if(risk > 0.0 && risk <= MaxStopAtr * atr_values[i])
+           {
+            RecordSignal(rates[i], false, up_level, stop, atr_values[i], risk, result);
+            trade.open = true;
+            trade.is_buy = false;
+            trade.entry = rates[i].close;
+            trade.stop = stop;
+            trade.target = rates[i].close - RewardRisk * risk;
+            last_signal_bar = i;
+            up_bar = -1;
+           }
+        }
+      else if(buy)
+        {
+         double stop = down_extreme - StopBufferAtr * atr_values[i];
+         double risk = rates[i].close - stop;
+         if(risk > 0.0 && risk <= MaxStopAtr * atr_values[i])
+           {
+            RecordSignal(rates[i], true, down_level, stop, atr_values[i], risk, result);
+            trade.open = true;
+            trade.is_buy = true;
+            trade.entry = rates[i].close;
+            trade.stop = stop;
+            trade.target = rates[i].close + RewardRisk * risk;
+            last_signal_bar = i;
+            down_bar = -1;
+           }
+        }
+     }
+
+   return result.found;
+  }
+
+void RecordSignal(const MqlRates &bar, const bool is_buy, const double swept_level,
+                  const double stop, const double atr, const double risk, ScalpSignal &result)
+  {
+   result.found = true;
+   result.is_buy = is_buy;
+   result.bar_time = bar.time;
+   result.swept_level = swept_level;
+   result.entry = bar.close;
+   result.stop = stop;
+   result.atr = atr;
+   result.target = bar.close + (is_buy ? 1.0 : -1.0) * RewardRisk * risk;
+  }
+
+string PriceText(const double price)
+  {
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   return DoubleToString(price, digits);
+  }

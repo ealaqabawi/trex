@@ -1,0 +1,12 @@
+BTCUSD.cap,2,trex_import\BTCUSD.bin,USD
+COPPER.cap,5,trex_import\COPPER.bin,USD
+DE40.cap,1,trex_import\DE40.bin,USD
+ETHUSD.cap,2,trex_import\ETHUSD.bin,USD
+EURUSD.cap,5,trex_import\EURUSD.bin,USD
+GBPUSD.cap,5,trex_import\GBPUSD.bin,USD
+GOLD.cap,2,trex_import\GOLD.bin,USD
+OIL_BRENT.cap,3,trex_import\OIL_BRENT.bin,USD
+OIL_CRUDE.cap,3,trex_import\OIL_CRUDE.bin,USD
+US100.cap,1,trex_import\US100.bin,USD
+USDCAD.cap,5,trex_import\USDCAD.bin,USD
+USDCHF.cap,5,trex_import\USDCHF.bin,USD

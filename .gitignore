@@ -9,6 +9,7 @@ node_modules/
 .DS_Store
 logs/*.log
 logs/orders.jsonl
+logs/scanner_control.json
 logs/daily_summary_*.txt
 .venv/
 data/cache/*.json
