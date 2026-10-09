@@ -20,6 +20,7 @@ from api.routes import (
     risk,
     telegram,
     settings as settings_route,
+    portfolio,
 )
 from memory.db import init_db
 
@@ -66,6 +67,7 @@ app.include_router(agents.router, prefix="/api/v1/agents", tags=["agents"])
 app.include_router(risk.router, prefix="/api/v1/risk", tags=["risk"])
 app.include_router(telegram.router, prefix="/api/v1/telegram", tags=["telegram"])
 app.include_router(settings_route.router, prefix="/api/v1/settings", tags=["settings"])
+app.include_router(portfolio.router, prefix="/api/v1/portfolio", tags=["portfolio"])
 
 
 # Serve the built frontend when it exists; the dev server owns the UI

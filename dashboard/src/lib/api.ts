@@ -275,6 +275,42 @@ export interface SettingsResponse {
 
 // --- public API --------------------------------------------------------
 
+export interface PortfolioPosition {
+  id: number;
+  imported_at: string;
+  source: string;
+  account_label: string | null;
+  symbol: string;
+  instrument_type: string | null;
+  quantity: number;
+  avg_cost: number | null;
+  market_price: number | null;
+  market_value: number | null;
+  unrealized_pnl: number | null;
+  currency: string | null;
+}
+
+export interface PortfolioSummary {
+  ok: boolean;
+  positions: PortfolioPosition[];
+  position_count: number;
+  gross_market_value: number;
+  net_market_value: number;
+  unrealized_pnl: number;
+  imported_at: string | null;
+  note?: string;
+}
+
+export interface PortfolioImportRow {
+  id: number;
+  imported_at: string;
+  source: string;
+  filename: string | null;
+  row_count: number;
+  account_label: string | null;
+  note: string | null;
+}
+
 export const api = {
   health: () => request<HealthResponse>("/health/"),
   overview: () => request<OverviewResponse>("/overview/"),
@@ -326,4 +362,26 @@ export const api = {
   risk: () => request<RiskResponse>("/risk/"),
   telegram: () => request<TelegramResponse>("/telegram/"),
   settings: () => request<SettingsResponse>("/settings/"),
+  portfolioSummary: (account_label?: string) =>
+    request<PortfolioSummary>(`/portfolio/${account_label ? `?account_label=${encodeURIComponent(account_label)}` : ""}`),
+  portfolioImports: () =>
+    request<{ ok: boolean; imports: PortfolioImportRow[] }>("/portfolio/imports"),
+  portfolioImport: async (
+    file: File,
+    opts: { source?: string; account_label?: string; note?: string } = {}
+  ) => {
+    const body = new FormData();
+    body.append("file", file);
+    body.append("source", opts.source ?? "sahm");
+    if (opts.account_label) body.append("account_label", opts.account_label);
+    if (opts.note) body.append("note", opts.note);
+    try {
+      const res = await fetch("/api/v1/portfolio/import", { method: "POST", body });
+      const data = await res.json();
+      if (!res.ok) return { ok: false as const, error: data.detail?.error || data.detail || `HTTP ${res.status}`, status: res.status };
+      return { ok: true as const, data };
+    } catch (e) {
+      return { ok: false as const, error: e instanceof Error ? e.message : String(e) };
+    }
+  },
 };
