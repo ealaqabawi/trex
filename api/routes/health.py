@@ -17,11 +17,10 @@ router = APIRouter()
 def health():
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
-    # A tiny real probe: ask yfinance for SPY options. The result is cached
-    # by yfinance itself, so this stays cheap; a failure here classifies
-    # the options feed as degraded in the UI.
-    probe = get_options_chain("SPY")
-    options_live = probe.ok
+    # Two real probes: SPY exercises the equity-options path (yfinance
+    # primary), SPX exercises the index path (Tradier / MarketData.app).
+    equity_probe = get_options_chain("SPY")
+    index_probe = get_options_chain("SPX")
 
     return {
         "ok": True,
@@ -30,9 +29,18 @@ def health():
         "mode": TRAX.mode,
         "subsystems": {
             "options_feed": {
-                "status": "ok" if options_live else "degraded",
-                "source": probe.source or "unknown",
-                "error": probe.error if not options_live else None,
+                "status": "ok" if equity_probe.ok else "degraded",
+                "source": equity_probe.source or "unknown",
+                "error": equity_probe.error if not equity_probe.ok else None,
+            },
+            "index_options_feed": {
+                "status": "ok" if index_probe.ok else (
+                    "unconfigured" if not (CONFIG.tradier_api_key or CONFIG.marketdata_app_token)
+                    else "degraded"
+                ),
+                "source": index_probe.source or "none",
+                "error": index_probe.error if not index_probe.ok else None,
+                "detail": "SPX / NDX / RUT need TRADIER_API_KEY or MARKETDATA_APP_TOKEN",
             },
             "price_feed": {
                 "status": "ok",

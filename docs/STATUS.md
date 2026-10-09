@@ -70,9 +70,13 @@ These are gaps you need to know about:
    workflow in `n8n/daily_signal_cycle.json` still has to be imported
    manually.
 
-3. **SPX option chains aren't served by yfinance.** The Options screen
-   falls back to SPY (the ETF proxy). The Market Monitor charts SPX
-   via `^GSPC`.
+3. **SPX option chains require a vendor key.** Yahoo doesn't serve
+   them. The Options screen is first-class for SPX once `TRADIER_API_KEY`
+   or `MARKETDATA_APP_TOKEN` is set in `.env`. Without one, the
+   `index_options_feed` subsystem reads `unconfigured` in the top status
+   bar and the Options screen shows "unavailable" for SPX — it does NOT
+   silently substitute SPY. The Market Monitor chart (`^GSPC`) is
+   independent and works without any key.
 
 4. **The sandbox network rate-limited yfinance** during one of the
    local health probes. Not a code bug; expected in a cloud container.

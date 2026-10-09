@@ -11,6 +11,8 @@ load_dotenv()
 class Config:
     polygon_api_key: str = os.getenv("POLYGON_API_KEY", "")
     tradier_api_key: str = os.getenv("TRADIER_API_KEY", "")
+    tradier_sandbox: bool = os.getenv("TRADIER_SANDBOX", "false").lower() == "true"
+    marketdata_app_token: str = os.getenv("MARKETDATA_APP_TOKEN", "")
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     n8n_base_url: str = os.getenv("N8N_BASE_URL", "http://localhost:5678")
