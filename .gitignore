@@ -13,3 +13,12 @@ logs/daily_summary_*.txt
 .venv/
 data/cache/*.json
 logs/signals.jsonl
+
+# --- TRAX ---
+data/trax.sqlite3
+data/trax.sqlite3-wal
+data/trax.sqlite3-shm
+dashboard/dist/
+dashboard/node_modules/
+dashboard/.vite/
+.pytest_cache/
