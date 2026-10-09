@@ -249,14 +249,69 @@ def test_main_dry_run_writes_nothing_and_sends_nothing(envs, monkeypatch):
     assert [m for m, _ in calls] == ["getMe"]
 
 
-def test_main_rejected_token_stops_before_writing(envs, monkeypatch, capsys):
+def _token_aware_telegram(valid_tokens, calls):
+    """getMe succeeds only for tokens in `valid_tokens`; sendMessage succeeds."""
+    def fake(token, method, payload=None, timeout=15.0):
+        calls.append((method, token))
+        if method == "getMe":
+            if token in valid_tokens:
+                return GET_ME_OK
+            return 401, {"ok": False, "description": "Unauthorized"}
+        return SEND_OK
+    return fake
+
+
+def test_main_rejected_token_and_user_quits_writes_nothing(envs, monkeypatch, capsys):
     trex, hermes = envs
     hermes.write_text(f"TELEGRAM_BOT_TOKEN={OLD_TOKEN}\n")
-    monkeypatch.setattr(st, "telegram_call", _fake_telegram(
-        {"getMe": (401, {"ok": False, "description": "Unauthorized"})}, []))
-    assert st.main(["--chat-id", "123456789"]) == 1
+    monkeypatch.setattr(st, "telegram_call", _token_aware_telegram(set(), []))
+    assert st.main(["--chat-id", "123456789"], secret_fn=lambda _: "") == 1
+    out = capsys.readouterr().out
+    assert "revoked or wrong" in out
+    assert "@BotFather" in out
+    assert "nothing was written" in out
     assert not trex.exists()
-    assert "revoked" in capsys.readouterr().out
+
+
+def test_main_rejected_token_then_pasted_current_token_succeeds(envs, monkeypatch, capsys):
+    """The real situation: ~/.hermes/.env holds a revoked token. The user
+    pastes the current one and setup completes with it."""
+    trex, hermes = envs
+    hermes.write_text(f"TELEGRAM_BOT_TOKEN={OLD_TOKEN}\nTELEGRAM_ALLOWED_USERS=987654321\n")
+    calls = []
+    monkeypatch.setattr(st, "telegram_call", _token_aware_telegram({TOKEN}, calls))
+    assert st.main([], secret_fn=lambda _: TOKEN) == 0
+
+    env = st.read_env_file(str(trex))
+    assert env["TELEGRAM_BOT_TOKEN"] == TOKEN
+    assert env["TELEGRAM_CHAT_ID"] == "987654321"
+    assert OLD_TOKEN not in trex.read_text()
+    assert calls == [("getMe", OLD_TOKEN), ("getMe", TOKEN), ("sendMessage", TOKEN)]
+    out = capsys.readouterr().out
+    assert "~/.hermes/.env still holds the revoked token" in out
+    assert TOKEN not in out and OLD_TOKEN not in out
+    assert hermes.read_text().startswith(f"TELEGRAM_BOT_TOKEN={OLD_TOKEN}")  # Hermes config untouched
+
+
+def test_main_dry_run_with_pasted_token_writes_nothing(envs, monkeypatch, capsys):
+    trex, hermes = envs
+    hermes.write_text(f"TELEGRAM_BOT_TOKEN={OLD_TOKEN}\nTELEGRAM_ALLOWED_USERS=987654321\n")
+    monkeypatch.setattr(st, "telegram_call", _token_aware_telegram({TOKEN}, []))
+    assert st.main(["--dry-run"], secret_fn=lambda _: TOKEN) == 0
+    assert not trex.exists()
+    assert "still holds the revoked token" in capsys.readouterr().out
+
+
+def test_main_gives_up_after_three_bad_tokens(envs, monkeypatch, capsys):
+    trex, hermes = envs
+    hermes.write_text(f"TELEGRAM_BOT_TOKEN={OLD_TOKEN}\n")
+    calls = []
+    monkeypatch.setattr(st, "telegram_call", _token_aware_telegram(set(), calls))
+    prompts = iter(["not-a-token", OLD_TOKEN, "unused"])
+    assert st.main(["--chat-id", "123456789"], secret_fn=lambda _: next(prompts)) == 1
+    assert [m for m, _ in calls] == ["getMe", "getMe"]  # malformed input never hits the network
+    assert "Giving up" in capsys.readouterr().out
+    assert not trex.exists()
 
 
 def test_main_prompts_for_token_and_chat_when_absent(envs, monkeypatch):
